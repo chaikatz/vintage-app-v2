@@ -125,9 +125,9 @@ CREATE POLICY "Users can view own invite codes" ON invite_codes
 CREATE POLICY "Users can create own invite codes" ON invite_codes
   FOR INSERT WITH CHECK (auth.uid() = creator_id);
 
-CREATE POLICY "Users can redeem invite codes" ON invite_codes
+CREATE POLICY "Invite codes can be redeemed once" ON invite_codes
   FOR UPDATE USING (used_by IS NULL)
-  WITH CHECK (used_by = auth.uid());
+  WITH CHECK (used_by IS NOT NULL);
 
 -- Create storage bucket for photos
 INSERT INTO storage.buckets (id, name, public) VALUES ('photos', 'photos', true);

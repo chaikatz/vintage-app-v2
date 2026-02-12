@@ -5,10 +5,12 @@ import { supabase } from '@/lib/supabase'
 import { FILTERS, applyFilterToCanvas, formatDateStamp, generateStoryImage } from '@/lib/filters'
 
 const DEFAULT_BIO = 'Collecting moments, not things'
+const ONE_YEAR_REJECTION = 'This memory needs more time. VINTAGE is for photos at least one year old.'
 
 function isOlderThanOneYear(dateValue) {
   if (!dateValue) return false
   const source = new Date(dateValue)
+  if (Number.isNaN(source.getTime())) return false
   const oneYearAgo = new Date()
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
   return source <= oneYearAgo
@@ -16,6 +18,13 @@ function isOlderThanOneYear(dateValue) {
 
 function createInviteCode() {
   return `VNT-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+}
+
+function formatAgoLabel(dateValue) {
+  const date = new Date(dateValue)
+  const now = new Date()
+  const years = Math.max(1, now.getFullYear() - date.getFullYear())
+  return `${years} year${years > 1 ? 's' : ''} ago`
 }
 
 async function reverseGeocode(latitude, longitude) {
@@ -73,14 +82,20 @@ export default function VintageApp() {
   const [screen, setScreen] = useState('welcome')
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
+  const [profileStats, setProfileStats] = useState({ followers: 0, following: 0 })
+
   const [authMode, setAuthMode] = useState('login')
   const [authForm, setAuthForm] = useState({ email: '', password: '', username: '', inviteCode: '' })
   const [authError, setAuthError] = useState('')
+
   const [notification, setNotification] = useState('')
+  const [loadingFeed, setLoadingFeed] = useState(false)
 
   const [posts, setPosts] = useState([])
   const [likedPosts, setLikedPosts] = useState(new Set())
   const [commentsByPost, setCommentsByPost] = useState({})
+  const [commentDraftByPost, setCommentDraftByPost] = useState({})
+
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [followingSet, setFollowingSet] = useState(new Set())
@@ -105,12 +120,37 @@ export default function VintageApp() {
     })
   }, [memoryBank])
 
+  function showNotification(message) {
+    setNotification(message)
+  }
+
+  function resetUploadSelection() {
+    if (uploadedPreview) {
+      URL.revokeObjectURL(uploadedPreview)
+    }
+    setUploadStep('select')
+    setUploadedFile(null)
+    setUploadedPreview(null)
+    setUploadCaption('')
+    setPhotoDate(null)
+    setManualDate('')
+    setNeedsManualDate(false)
+    setSelectedFilter('slimAarons')
+  }
+
   useEffect(() => {
     const timer = notification ? setTimeout(() => setNotification(''), 3000) : null
     return () => {
       if (timer) clearTimeout(timer)
     }
   }, [notification])
+
+  useEffect(() => {
+    return () => {
+      if (uploadedPreview) URL.revokeObjectURL(uploadedPreview)
+      memoryBank.forEach((item) => URL.revokeObjectURL(item.objectUrl))
+    }
+  }, [uploadedPreview, memoryBank])
 
   useEffect(() => {
     async function initSession() {
@@ -130,6 +170,8 @@ export default function VintageApp() {
       } else {
         setUser(null)
         setProfile(null)
+        setPosts([])
+        setCommentsByPost({})
         setScreen('welcome')
       }
     })
@@ -139,81 +181,148 @@ export default function VintageApp() {
 
   useEffect(() => {
     if (!user) return
-    loadProfile()
-    loadFollowing()
-    loadPosts()
-    loadLikes()
-    loadRemainingInvites()
+    refreshAll()
   }, [user])
 
+  async function refreshAll() {
+    await Promise.all([
+      loadProfile(),
+      loadFollowing(),
+      loadLikes(),
+      loadRemainingInvites(),
+      loadProfileStats(),
+      loadPosts()
+    ])
+  }
+
   async function loadRemainingInvites() {
-    const { count } = await supabase
+    const { count, error } = await supabase
       .from('invite_codes')
       .select('id', { count: 'exact', head: true })
       .eq('creator_id', user.id)
       .is('used_by', null)
-    setRemainingInvites(count || 0)
+
+    if (!error) setRemainingInvites(count || 0)
   }
 
   async function loadProfile() {
-    const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-    setProfile(data)
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+    if (!error) setProfile(data)
+  }
+
+  async function loadProfileStats() {
+    const [{ count: following }, { count: followers }] = await Promise.all([
+      supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', user.id),
+      supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', user.id)
+    ])
+
+    setProfileStats({ following: following || 0, followers: followers || 0 })
   }
 
   async function loadFollowing() {
-    const { data } = await supabase.from('follows').select('following_id').eq('follower_id', user.id)
-    setFollowingSet(new Set((data || []).map((item) => item.following_id)))
+    const { data, error } = await supabase.from('follows').select('following_id').eq('follower_id', user.id)
+    if (!error) setFollowingSet(new Set((data || []).map((item) => item.following_id)))
   }
 
   async function loadLikes() {
-    const { data } = await supabase.from('likes').select('post_id').eq('user_id', user.id)
-    setLikedPosts(new Set((data || []).map((item) => item.post_id)))
+    const { data, error } = await supabase.from('likes').select('post_id').eq('user_id', user.id)
+    if (!error) setLikedPosts(new Set((data || []).map((item) => item.post_id)))
   }
 
   async function loadPosts() {
-    const { data: follows } = await supabase.from('follows').select('following_id').eq('follower_id', user.id)
+    setLoadingFeed(true)
+
+    const { data: follows, error: followsError } = await supabase.from('follows').select('following_id').eq('follower_id', user.id)
+    if (followsError) {
+      showNotification('Could not load follows')
+      setLoadingFeed(false)
+      return
+    }
+
     const visibleUserIds = [user.id, ...(follows || []).map((item) => item.following_id)]
 
-    const { data: postsData } = await supabase
+    const { data: postsData, error: postsError } = await supabase
       .from('posts')
       .select('*')
       .in('user_id', visibleUserIds)
       .order('created_at', { ascending: false })
+
+    if (postsError) {
+      showNotification('Could not load feed')
+      setLoadingFeed(false)
+      return
+    }
 
     const userIds = [...new Set((postsData || []).map((post) => post.user_id))]
     const { data: profileRows } = userIds.length
       ? await supabase.from('profiles').select('id, username, avatar_url, bio').in('id', userIds)
       : { data: [] }
 
-    const merged = (postsData || []).map((post) => ({
+    const mergedPosts = (postsData || []).map((post) => ({
       ...post,
-      profile: profileRows.find((row) => row.id === post.user_id)
+      profile: (profileRows || []).find((row) => row.id === post.user_id)
     }))
 
-    setPosts(merged)
+    setPosts(mergedPosts)
 
-    const { data: comments } = await supabase
+    if (!postsData?.length) {
+      setCommentsByPost({})
+      setLoadingFeed(false)
+      return
+    }
+
+    const { data: comments, error: commentsError } = await supabase
       .from('comments')
-      .select('id, post_id, text, created_at, user_id, profiles (username)')
-      .in('post_id', (postsData || []).map((post) => post.id))
+      .select('id, post_id, text, created_at, user_id')
+      .in('post_id', postsData.map((post) => post.id))
       .order('created_at', { ascending: true })
+
+    if (commentsError) {
+      setCommentsByPost({})
+      setLoadingFeed(false)
+      return
+    }
+
+    const commenterIds = [...new Set((comments || []).map((comment) => comment.user_id))]
+    const { data: commenterProfiles } = commenterIds.length
+      ? await supabase.from('profiles').select('id, username').in('id', commenterIds)
+      : { data: [] }
+
+    const usernameById = new Map((commenterProfiles || []).map((item) => [item.id, item.username]))
 
     const grouped = (comments || []).reduce((acc, current) => {
       if (!acc[current.post_id]) acc[current.post_id] = []
-      acc[current.post_id].push(current)
+      acc[current.post_id].push({
+        ...current,
+        username: usernameById.get(current.user_id) || 'user'
+      })
       return acc
     }, {})
 
     setCommentsByPost(grouped)
+    setLoadingFeed(false)
+  }
+
+  async function ensureAuthedSession(email, password) {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (session?.user) return true
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    return !error
   }
 
   async function createStarterInvites(creatorId) {
     const payload = Array.from({ length: 5 }).map(() => ({ code: createInviteCode(), creator_id: creatorId }))
-    await supabase.from('invite_codes').insert(payload)
+    const { error } = await supabase.from('invite_codes').insert(payload)
+    return !error
   }
 
   async function handleAuth() {
     setAuthError('')
+
+    if (!authForm.email || !authForm.password) {
+      setAuthError('Email and password are required')
+      return
+    }
 
     if (authMode === 'signup') {
       const inviteCode = authForm.inviteCode.trim().toUpperCase()
@@ -222,46 +331,62 @@ export default function VintageApp() {
         return
       }
 
-      const { data: invite } = await supabase
+      const { data: invite, error: inviteError } = await supabase
         .from('invite_codes')
         .select('*')
         .eq('code', inviteCode)
         .is('used_by', null)
         .single()
 
-      if (!invite) {
+      if (inviteError || !invite) {
         setAuthError('Invalid or already-used invite code')
         return
       }
 
-      const { data, error } = await supabase.auth.signUp({ email: authForm.email, password: authForm.password })
-      if (error) {
-        setAuthError(error.message)
+      const { data, error } = await supabase.auth.signUp({
+        email: authForm.email,
+        password: authForm.password
+      })
+
+      if (error || !data?.user?.id) {
+        setAuthError(error?.message || 'Signup failed')
         return
       }
 
-      await supabase.from('profiles').insert({
+      await supabase.from('profiles').upsert({
         id: data.user.id,
-        username: authForm.username || authForm.email.split('@')[0],
+        username: authForm.username?.trim() || authForm.email.split('@')[0],
         bio: DEFAULT_BIO
       })
 
-      await supabase.from('invite_codes').update({ used_by: data.user.id }).eq('id', invite.id)
-      await createStarterInvites(data.user.id)
-      setNotification('Welcome to VINTAGE')
+      const authed = await ensureAuthedSession(authForm.email, authForm.password)
+      if (authed) {
+        await supabase.from('invite_codes').update({ used_by: data.user.id }).eq('id', invite.id)
+        await createStarterInvites(data.user.id)
+      }
+
+      showNotification('Welcome to VINTAGE')
+      setAuthMode('login')
       return
     }
 
     const { error } = await supabase.auth.signInWithPassword({ email: authForm.email, password: authForm.password })
-    if (error) setAuthError(error.message)
+    if (error) {
+      setAuthError(error.message)
+      return
+    }
+    showNotification('Welcome back')
   }
 
   async function handlePickMemory(event) {
     const file = event.target.files?.[0]
     if (!file) return
 
+    if (uploadedPreview) URL.revokeObjectURL(uploadedPreview)
+    const nextPreview = URL.createObjectURL(file)
+
     setUploadedFile(file)
-    setUploadedPreview(URL.createObjectURL(file))
+    setUploadedPreview(nextPreview)
     setUploadStep('filter')
 
     try {
@@ -272,13 +397,13 @@ export default function VintageApp() {
       if (!parsedDate) {
         setNeedsManualDate(true)
         setPhotoDate(null)
-        setNotification('No EXIF date found. Please enter memory date manually.')
+        showNotification('No EXIF date found. Please enter memory date manually.')
         return
       }
 
       if (!isOlderThanOneYear(parsedDate)) {
-        setNotification('This memory needs more time. VINTAGE is for photos at least one year old.')
-        setUploadStep('select')
+        showNotification(ONE_YEAR_REJECTION)
+        resetUploadSelection()
         return
       }
 
@@ -287,6 +412,7 @@ export default function VintageApp() {
     } catch {
       setNeedsManualDate(true)
       setPhotoDate(null)
+      showNotification('No EXIF date found. Please enter memory date manually.')
     }
   }
 
@@ -295,6 +421,7 @@ export default function VintageApp() {
     if (!files.length) return
 
     const exifr = (await import('exifr')).default
+
     const loaded = await Promise.all(files.map(async (file) => {
       let exif = null
       try {
@@ -308,6 +435,7 @@ export default function VintageApp() {
 
       return {
         id: `${file.name}-${file.lastModified}`,
+        file,
         objectUrl: URL.createObjectURL(file),
         filename: file.name,
         photoDate,
@@ -315,28 +443,49 @@ export default function VintageApp() {
       }
     }))
 
-    setMemoryBank((prev) => [...loaded, ...prev].sort((a, b) => new Date(b.photoDate) - new Date(a.photoDate)))
-    setNotification('Memories indexed locally')
+    setMemoryBank((prev) => {
+      const byId = new Map(prev.map((item) => [item.id, item]))
+      loaded.forEach((item) => byId.set(item.id, item))
+      return [...byId.values()].sort((a, b) => new Date(b.photoDate) - new Date(a.photoDate))
+    })
+    showNotification('Memories indexed locally')
+  }
+
+  function useMemoryForPost(memory) {
+    if (!isOlderThanOneYear(memory.photoDate)) {
+      showNotification(ONE_YEAR_REJECTION)
+      return
+    }
+
+    if (uploadedPreview) URL.revokeObjectURL(uploadedPreview)
+    setUploadedFile(memory.file)
+    setUploadedPreview(memory.objectUrl)
+    setUploadStep('filter')
+    setNeedsManualDate(false)
+    setPhotoDate(new Date(memory.photoDate))
   }
 
   async function handleCreatePost() {
-    if (!uploadedFile) return
+    if (!uploadedFile) {
+      showNotification('Select a memory first')
+      return
+    }
 
     const effectiveDate = needsManualDate ? new Date(manualDate) : photoDate
     if (!effectiveDate || Number.isNaN(effectiveDate.getTime())) {
-      setNotification('Add a valid memory date')
+      showNotification('Add a valid memory date')
       return
     }
 
     if (!isOlderThanOneYear(effectiveDate)) {
-      setNotification('This memory needs more time. VINTAGE is for photos at least one year old.')
+      showNotification(ONE_YEAR_REJECTION)
       return
     }
 
     const fileName = `${user.id}/${Date.now()}-${uploadedFile.name}`
     const { error: uploadError } = await supabase.storage.from('photos').upload(fileName, uploadedFile)
     if (uploadError) {
-      setNotification('Upload failed')
+      showNotification('Upload failed')
       return
     }
 
@@ -345,27 +494,21 @@ export default function VintageApp() {
     const { error: postError } = await supabase.from('posts').insert({
       user_id: user.id,
       image_url: publicUrl,
-      caption: uploadCaption,
+      caption: uploadCaption.trim(),
       filter: selectedFilter,
       photo_date: effectiveDate.toISOString(),
       date_stamp: formatDateStamp(effectiveDate)
     })
 
     if (postError) {
-      setNotification('Post failed')
+      showNotification('Post failed')
       return
     }
 
-    setUploadStep('select')
-    setUploadedFile(null)
-    setUploadedPreview(null)
-    setUploadCaption('')
-    setPhotoDate(null)
-    setManualDate('')
-    setNeedsManualDate(false)
+    resetUploadSelection()
     setScreen('feed')
-    setNotification('Memory posted')
-    loadPosts()
+    showNotification('Memory posted')
+    await refreshAll()
   }
 
   async function handleLike(post) {
@@ -378,14 +521,21 @@ export default function VintageApp() {
       await supabase.from('posts').update({ likes: (post.likes || 0) + 1 }).eq('id', post.id)
     }
 
-    await loadLikes()
-    await loadPosts()
+    await Promise.all([loadLikes(), loadPosts()])
   }
 
-  async function handleComment(postId, text) {
-    if (!text.trim()) return
-    await supabase.from('comments').insert({ user_id: user.id, post_id: postId, text: text.trim() })
-    loadPosts()
+  async function handleComment(postId) {
+    const draft = commentDraftByPost[postId] || ''
+    if (!draft.trim()) return
+
+    const { error } = await supabase.from('comments').insert({ user_id: user.id, post_id: postId, text: draft.trim() })
+    if (error) {
+      showNotification('Could not add comment')
+      return
+    }
+
+    setCommentDraftByPost((prev) => ({ ...prev, [postId]: '' }))
+    await loadPosts()
   }
 
   async function handleSearch() {
@@ -394,11 +544,16 @@ export default function VintageApp() {
       return
     }
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('id, username, bio, avatar_url')
       .ilike('username', `%${searchQuery.trim()}%`)
       .limit(20)
+
+    if (error) {
+      showNotification('Search failed')
+      return
+    }
 
     setSearchResults(data || [])
   }
@@ -410,40 +565,46 @@ export default function VintageApp() {
       await supabase.from('follows').insert({ follower_id: user.id, following_id: targetUserId })
     }
 
-    loadFollowing()
-    loadPosts()
+    await Promise.all([loadFollowing(), loadProfileStats(), loadPosts()])
   }
 
   async function saveProfile() {
     if (!profile?.username?.trim()) {
-      setNotification('Username required')
+      showNotification('Username required')
       return
     }
 
-    await supabase
+    const { error } = await supabase
       .from('profiles')
       .update({ username: profile.username.trim(), bio: profile.bio || DEFAULT_BIO })
       .eq('id', user.id)
 
-    setNotification('Profile updated')
+    if (error) {
+      showNotification('Could not save profile')
+      return
+    }
+
+    showNotification('Profile updated')
+    await loadProfile()
   }
 
-  async function exportStory(post) {
-    setNotification('Preparing story export...')
-    generateStoryImage(post.image_url, post.filter, post.date_stamp, (blob) => {
+  function exportStory(post) {
+    const dateStamp = post.date_stamp || formatDateStamp(post.photo_date || new Date())
+    showNotification('Preparing story export...')
+    generateStoryImage(post.image_url, post.filter, dateStamp, (blob) => {
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `vintage-story-${post.date_stamp}.png`
+      anchor.download = `vintage-story-${dateStamp}.png`
       anchor.click()
       URL.revokeObjectURL(url)
-      setNotification('Story image saved')
+      showNotification('Story image saved')
     })
   }
 
   return (
     <div className="min-h-screen pb-24">
-      {notification && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-vintage-charcoal text-white px-4 py-2 rounded">{notification}</div>}
+      {notification && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-vintage-charcoal text-white px-4 py-2 rounded text-sm">{notification}</div>}
 
       {screen === 'welcome' && (
         <section className="min-h-screen flex flex-col justify-center max-w-md mx-auto px-8 text-center fade-in">
@@ -461,7 +622,9 @@ export default function VintageApp() {
             <input className="w-full p-3 border rounded bg-white" type="password" placeholder="Password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} />
             {authError && <p className="text-sm text-red-600">{authError}</p>}
             <button onClick={handleAuth} className="w-full p-3 bg-vintage-charcoal text-white tracking-[2px]">{authMode === 'login' ? 'ENTER MUSEUM' : 'CREATE ACCOUNT'}</button>
-            <button className="underline text-sm" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>{authMode === 'login' ? 'Need an invite?' : 'Already have an account?'}</button>
+            <button className="underline text-sm" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
+              {authMode === 'login' ? 'Need an invite?' : 'Already have an account?'}
+            </button>
           </div>
         </section>
       )}
@@ -471,14 +634,15 @@ export default function VintageApp() {
           <header className="sticky top-0 bg-vintage-cream border-b p-4 z-30">
             <div className="max-w-xl mx-auto flex justify-between items-center">
               <h2 className="tracking-[4px] text-xl">VINTAGE</h2>
-              <button className="text-sm underline" onClick={loadPosts}>Refresh</button>
+              <button className="text-sm underline" onClick={refreshAll}>Refresh</button>
             </div>
           </header>
 
           <main className="max-w-xl mx-auto p-4 fade-in">
             {screen === 'feed' && (
               <div className="space-y-5">
-                {posts.length === 0 && <p className="text-vintage-muted text-center py-16">Follow friends to fill your museum feed.</p>}
+                {loadingFeed && <p className="text-vintage-muted text-center py-8">Loading feed...</p>}
+                {!loadingFeed && posts.length === 0 && <p className="text-vintage-muted text-center py-16">Follow friends to fill your museum feed.</p>}
                 {posts.map((post) => (
                   <article key={post.id} className="bg-white p-3 rounded-lg shadow-sm">
                     <div className="flex items-center justify-between mb-2">
@@ -493,7 +657,23 @@ export default function VintageApp() {
                       <button onClick={() => handleLike(post)}>{likedPosts.has(post.id) ? '♥' : '♡'} {post.likes || 0}</button>
                     </div>
                     <p className="mt-2"><span className="font-semibold mr-2">{post.profile?.username}</span>{post.caption}</p>
-                    <Comments comments={commentsByPost[post.id] || []} onSubmit={(text) => handleComment(post.id, text)} />
+
+                    <div className="mt-3 pt-2 border-t">
+                      <div className="space-y-1 mb-2">
+                        {(commentsByPost[post.id] || []).slice(-3).map((comment) => (
+                          <p key={comment.id} className="text-sm"><span className="font-semibold mr-1">{comment.username}</span>{comment.text}</p>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          className="flex-1 border rounded px-2 py-1 text-sm"
+                          placeholder="Write a comment"
+                          value={commentDraftByPost[post.id] || ''}
+                          onChange={(event) => setCommentDraftByPost((prev) => ({ ...prev, [post.id]: event.target.value }))}
+                        />
+                        <button className="text-sm underline" onClick={() => handleComment(post.id)}>Post</button>
+                      </div>
+                    </div>
                   </article>
                 ))}
               </div>
@@ -518,10 +698,16 @@ export default function VintageApp() {
                       ))}
                     </div>
                     {needsManualDate && (
-                      <input type="date" className="w-full p-3 border rounded bg-white" value={manualDate} onChange={(event) => setManualDate(event.target.value)} />
+                      <div>
+                        <input type="date" className="w-full p-3 border rounded bg-white" value={manualDate} onChange={(event) => setManualDate(event.target.value)} />
+                        <p className="text-xs text-vintage-muted mt-1">No EXIF date was found. You can manually enter the memory date.</p>
+                      </div>
                     )}
                     <input value={uploadCaption} onChange={(event) => setUploadCaption(event.target.value)} className="w-full p-3 border rounded bg-white" placeholder="Location, year..." />
-                    <button className="w-full p-3 bg-vintage-charcoal text-white" onClick={handleCreatePost}>Post memory</button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button className="w-full p-3 bg-vintage-charcoal text-white" onClick={handleCreatePost}>Post memory</button>
+                      <button className="w-full p-3 border" onClick={resetUploadSelection}>Cancel</button>
+                    </div>
                   </>
                 )}
 
@@ -534,17 +720,21 @@ export default function VintageApp() {
                   <p className="text-sm text-vintage-muted mb-2">On this day</p>
                   <div className="grid grid-cols-3 gap-2 mb-4">
                     {onThisDay.slice(0, 6).map((item) => (
-                      <img key={item.id} src={item.objectUrl} alt={item.filename} className="w-full aspect-square object-cover rounded" />
+                      <button key={item.id} onClick={() => useMemoryForPost(item)} className="text-left">
+                        <img src={item.objectUrl} alt={item.filename} className="w-full aspect-square object-cover rounded" />
+                      </button>
                     ))}
                   </div>
                   <p className="text-sm text-vintage-muted mb-2">Timeline</p>
                   <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                     {memoryBank.map((item) => (
                       <div key={item.id} className="flex gap-3 items-center">
-                        <img src={item.objectUrl} alt={item.filename} className="w-12 h-12 rounded object-cover" />
-                        <div>
-                          <p className="text-sm">{new Date(item.photoDate).toLocaleDateString()} {item.locationName ? `— ${item.locationName}` : ''}</p>
-                          <p className="text-xs text-vintage-muted">{item.filename}</p>
+                        <button onClick={() => useMemoryForPost(item)}>
+                          <img src={item.objectUrl} alt={item.filename} className="w-12 h-12 rounded object-cover" />
+                        </button>
+                        <div className="flex-1">
+                          <p className="text-sm">{formatAgoLabel(item.photoDate)} {item.locationName ? `— ${item.locationName}` : ''}</p>
+                          <p className="text-xs text-vintage-muted">{new Date(item.photoDate).toLocaleDateString()} · {item.filename}</p>
                         </div>
                       </div>
                     ))}
@@ -585,8 +775,8 @@ export default function VintageApp() {
                 </div>
                 <div className="grid grid-cols-4 text-center bg-white rounded p-3">
                   <Stat label="Posts" value={myPosts.length} />
-                  <Stat label="Followers" value={0} />
-                  <Stat label="Following" value={followingSet.size} />
+                  <Stat label="Followers" value={profileStats.followers} />
+                  <Stat label="Following" value={profileStats.following} />
                   <Stat label="Invites" value={remainingInvites} />
                 </div>
                 <div className="grid grid-cols-3 gap-1">
@@ -618,37 +808,6 @@ function Stat({ label, value }) {
     <div>
       <p className="text-lg font-semibold">{value}</p>
       <p className="text-xs text-vintage-muted uppercase">{label}</p>
-    </div>
-  )
-}
-
-function Comments({ comments, onSubmit }) {
-  const [text, setText] = useState('')
-
-  return (
-    <div className="mt-3 pt-2 border-t">
-      <div className="space-y-1 mb-2">
-        {comments.slice(-3).map((comment) => (
-          <p key={comment.id} className="text-sm"><span className="font-semibold mr-1">{comment.profiles?.username || 'user'}</span>{comment.text}</p>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <input
-          className="flex-1 border rounded px-2 py-1 text-sm"
-          placeholder="Write a comment"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-        />
-        <button
-          className="text-sm underline"
-          onClick={() => {
-            onSubmit(text)
-            setText('')
-          }}
-        >
-          Post
-        </button>
-      </div>
     </div>
   )
 }
