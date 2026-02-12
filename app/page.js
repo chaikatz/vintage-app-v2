@@ -95,6 +95,7 @@ export default function VintageApp() {
   const [likedPosts, setLikedPosts] = useState(new Set())
   const [commentsByPost, setCommentsByPost] = useState({})
   const [commentDraftByPost, setCommentDraftByPost] = useState({})
+  const [selectedProfilePost, setSelectedProfilePost] = useState(null)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
@@ -592,6 +593,25 @@ export default function VintageApp() {
     <div className="min-h-screen pb-24">
       {notification && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-vintage-charcoal text-white px-4 py-2 rounded text-sm">{notification}</div>}
 
+      {selectedProfilePost && (
+        <div className="fixed inset-0 z-[120] bg-black/85 flex items-center justify-center p-4" onClick={() => setSelectedProfilePost(null)}>
+          <div className="w-full max-w-lg" onClick={(event) => event.stopPropagation()}>
+            <div className="flex justify-end mb-2">
+              <button className="text-white text-sm underline" onClick={() => setSelectedProfilePost(null)}>Close</button>
+            </div>
+            <div className="bg-white rounded-xl p-3">
+              <FilteredPhoto
+                src={selectedProfilePost.image_url}
+                filter={selectedProfilePost.filter}
+                dateStamp={selectedProfilePost.date_stamp}
+                className="rounded overflow-hidden"
+              />
+              <p className="text-sm mt-3"><span className="font-semibold mr-2">{selectedProfilePost.profile?.username || profile?.username}</span>{selectedProfilePost.caption}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {screen === 'welcome' && (
         <section className="min-h-screen flex flex-col justify-center max-w-md mx-auto px-8 text-center fade-in">
           <h1 className="text-5xl tracking-[7px] mb-4">VINTAGE</h1>
@@ -773,7 +793,9 @@ export default function VintageApp() {
                 </div>
                 <div className="grid grid-cols-3 gap-1">
                   {myPosts.map((post) => (
-                    <FilteredPhoto key={post.id} src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden" />
+                    <button key={post.id} className="text-left" onClick={() => setSelectedProfilePost(post)}>
+                      <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden rounded" />
+                    </button>
                   ))}
                 </div>
                 <button className="underline text-sm" onClick={() => supabase.auth.signOut()}>Log out</button>
