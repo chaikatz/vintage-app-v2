@@ -524,6 +524,23 @@ export default function VintageApp() {
     await Promise.all([loadLikes(), loadPosts()])
   }
 
+  async function handleDeletePost(postId) {
+    const post = posts.find((item) => item.id === postId)
+    if (!post || post.user_id !== user?.id) return
+
+    const shouldDelete = window.confirm('Delete this memory? This cannot be undone.')
+    if (!shouldDelete) return
+
+    const { error } = await supabase.from('posts').delete().eq('id', postId)
+    if (error) {
+      showNotification('Could not delete post')
+      return
+    }
+
+    showNotification('Memory deleted')
+    await loadPosts()
+  }
+
   async function handleComment(postId) {
     const draft = commentDraftByPost[postId] || ''
     if (!draft.trim()) return
@@ -644,13 +661,18 @@ export default function VintageApp() {
                 {loadingFeed && <p className="text-vintage-muted text-center py-8">Loading feed...</p>}
                 {!loadingFeed && posts.length === 0 && <p className="text-vintage-muted text-center py-16">Follow friends to fill your museum feed.</p>}
                 {posts.map((post) => (
-                  <article key={post.id} className="bg-white p-3 rounded-lg shadow-sm">
+                  <article key={post.id} className="bg-white p-3 rounded-lg shadow-sm border border-[#ece9df]">
                     <div className="flex items-center justify-between mb-2">
                       <div>
                         <p className="font-semibold">{post.profile?.username || 'anonymous'}</p>
                         <p className="text-xs text-vintage-muted">{new Date(post.created_at).toLocaleDateString()}</p>
                       </div>
-                      <button className="text-xs underline" onClick={() => exportStory(post)}>Story export</button>
+                      <div className="flex items-center gap-3">
+                        <button className="text-xs underline" onClick={() => exportStory(post)}>Story export</button>
+                        {post.user_id === user?.id && (
+                          <button className="text-xs text-red-500 underline" onClick={() => handleDeletePost(post.id)}>Delete</button>
+                        )}
+                      </div>
                     </div>
                     <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden" />
                     <div className="flex items-center justify-between mt-2">
@@ -768,9 +790,12 @@ export default function VintageApp() {
             {screen === 'profile' && profile && (
               <section className="space-y-4">
                 <h3 className="text-xl">Profile</h3>
-                <div className="bg-white p-4 rounded-lg space-y-2">
-                  <input className="w-full p-2 border rounded" value={profile.username || ''} onChange={(event) => setProfile({ ...profile, username: event.target.value })} />
-                  <textarea className="w-full p-2 border rounded" rows={3} value={profile.bio || ''} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} />
+                <div className="bg-white p-5 rounded-xl border border-[#ece9df] space-y-3">
+                  <input className="w-full p-3 border rounded-lg" value={profile.username || ''} onChange={(event) => setProfile({ ...profile, username: event.target.value })} />
+                  <div className="rounded-lg border border-[#ece9df] bg-[#faf9f4] p-3">
+                    <p className="text-xs uppercase tracking-wider text-vintage-muted mb-2">Bio</p>
+                    <textarea className="w-full p-0 border-0 bg-transparent focus:outline-none text-sm leading-relaxed" rows={4} value={profile.bio || ''} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} placeholder="Collecting moments, not things" />
+                  </div>
                   <button className="text-sm underline" onClick={saveProfile}>Save profile</button>
                 </div>
                 <div className="grid grid-cols-4 text-center bg-white rounded p-3">
@@ -789,12 +814,14 @@ export default function VintageApp() {
             )}
           </main>
 
-          <nav className="fixed bottom-0 left-0 right-0 border-t bg-vintage-cream">
-            <div className="max-w-xl mx-auto grid grid-cols-4 text-center text-sm">
-              <button className="p-4" onClick={() => setScreen('feed')}>Feed</button>
-              <button className="p-4" onClick={() => setScreen('search')}>Search</button>
-              <button className="p-4" onClick={() => setScreen('upload')}>Upload</button>
-              <button className="p-4" onClick={() => setScreen('profile')}>Profile</button>
+          <nav className="fixed bottom-4 left-0 right-0 z-40">
+            <div className="max-w-xl mx-auto px-4">
+              <div className="grid grid-cols-4 text-center text-xs bg-white border border-[#e8e4d8] rounded-2xl shadow-lg overflow-hidden">
+                <button className={`py-3 transition-colors ${screen === 'feed' ? 'bg-vintage-charcoal text-white' : 'text-vintage-charcoal'}`} onClick={() => setScreen('feed')}>Feed</button>
+                <button className={`py-3 transition-colors ${screen === 'search' ? 'bg-vintage-charcoal text-white' : 'text-vintage-charcoal'}`} onClick={() => setScreen('search')}>Search</button>
+                <button className={`py-3 transition-colors ${screen === 'upload' ? 'bg-vintage-charcoal text-white' : 'text-vintage-charcoal'}`} onClick={() => setScreen('upload')}>Upload</button>
+                <button className={`py-3 transition-colors ${screen === 'profile' ? 'bg-vintage-charcoal text-white' : 'text-vintage-charcoal'}`} onClick={() => setScreen('profile')}>Profile</button>
+              </div>
             </div>
           </nav>
         </>
