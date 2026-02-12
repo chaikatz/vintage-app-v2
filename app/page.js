@@ -85,7 +85,7 @@ export default function VintageApp() {
   const [profileStats, setProfileStats] = useState({ followers: 0, following: 0 })
 
   const [authMode, setAuthMode] = useState('login')
-  const [authForm, setAuthForm] = useState({ email: '', password: '', username: '', inviteCode: '' })
+  const [authForm, setAuthForm] = useState({ email: '', password: '', username: '' })
   const [authError, setAuthError] = useState('')
 
   const [notification, setNotification] = useState('')
@@ -99,7 +99,6 @@ export default function VintageApp() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [followingSet, setFollowingSet] = useState(new Set())
-  const [remainingInvites, setRemainingInvites] = useState(0)
 
   const [uploadStep, setUploadStep] = useState('select')
   const [uploadedFile, setUploadedFile] = useState(null)
@@ -189,20 +188,9 @@ export default function VintageApp() {
       loadProfile(),
       loadFollowing(),
       loadLikes(),
-      loadRemainingInvites(),
       loadProfileStats(),
       loadPosts()
     ])
-  }
-
-  async function loadRemainingInvites() {
-    const { count, error } = await supabase
-      .from('invite_codes')
-      .select('id', { count: 'exact', head: true })
-      .eq('creator_id', user.id)
-      .is('used_by', null)
-
-    if (!error) setRemainingInvites(count || 0)
   }
 
   async function loadProfile() {
@@ -325,24 +313,6 @@ export default function VintageApp() {
     }
 
     if (authMode === 'signup') {
-      const inviteCode = authForm.inviteCode.trim().toUpperCase()
-      if (!inviteCode) {
-        setAuthError('Invite code is required')
-        return
-      }
-
-      const { data: invite, error: inviteError } = await supabase
-        .from('invite_codes')
-        .select('*')
-        .eq('code', inviteCode)
-        .is('used_by', null)
-        .single()
-
-      if (inviteError || !invite) {
-        setAuthError('Invalid or already-used invite code')
-        return
-      }
-
       const { data, error } = await supabase.auth.signUp({
         email: authForm.email,
         password: authForm.password
@@ -361,7 +331,6 @@ export default function VintageApp() {
 
       const authed = await ensureAuthedSession(authForm.email, authForm.password)
       if (authed) {
-        await supabase.from('invite_codes').update({ used_by: data.user.id }).eq('id', invite.id)
         await createStarterInvites(data.user.id)
       }
 
@@ -632,7 +601,6 @@ export default function VintageApp() {
             {authMode === 'signup' && (
               <>
                 <input className="w-full p-3 border rounded bg-white" placeholder="Username" value={authForm.username} onChange={(event) => setAuthForm({ ...authForm, username: event.target.value })} />
-                <input className="w-full p-3 border rounded bg-white uppercase" placeholder="Invite code" value={authForm.inviteCode} onChange={(event) => setAuthForm({ ...authForm, inviteCode: event.target.value })} />
               </>
             )}
             <input className="w-full p-3 border rounded bg-white" type="email" placeholder="Email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} />
@@ -640,7 +608,7 @@ export default function VintageApp() {
             {authError && <p className="text-sm text-red-600">{authError}</p>}
             <button onClick={handleAuth} className="w-full p-3 bg-vintage-charcoal text-white tracking-[2px]">{authMode === 'login' ? 'ENTER MUSEUM' : 'CREATE ACCOUNT'}</button>
             <button className="underline text-sm" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
-              {authMode === 'login' ? 'Need an invite?' : 'Already have an account?'}
+              {authMode === 'login' ? 'Need an account?' : 'Already have an account?'}
             </button>
           </div>
         </section>
@@ -798,11 +766,10 @@ export default function VintageApp() {
                   </div>
                   <button className="text-sm underline" onClick={saveProfile}>Save profile</button>
                 </div>
-                <div className="grid grid-cols-4 text-center bg-white rounded p-3">
+                <div className="grid grid-cols-3 text-center bg-white rounded p-3">
                   <Stat label="Posts" value={myPosts.length} />
                   <Stat label="Followers" value={profileStats.followers} />
                   <Stat label="Following" value={profileStats.following} />
-                  <Stat label="Invites" value={remainingInvites} />
                 </div>
                 <div className="grid grid-cols-3 gap-1">
                   {myPosts.map((post) => (
