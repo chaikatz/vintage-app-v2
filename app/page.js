@@ -1,233 +1,654 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { FILTERS, applyFilterToCanvas, generateStoryImage, formatDateStamp } from '@/lib/filters'
+import { FILTERS, applyFilterToCanvas, formatDateStamp, generateStoryImage } from '@/lib/filters'
 
-const HomeIcon = ({ active }) => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? "2" : "1.5"} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>)
-const SearchIcon = ({ active }) => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? "2" : "1.5"} strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>)
-const PlusIcon = ({ active }) => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? "2" : "1.5"} strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>)
-const MessageIcon = ({ active }) => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? "2" : "1.5"} strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>)
-const ProfileIcon = ({ active }) => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? "2" : "1.5"} strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>)
-const ShareIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>)
-const TrashIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>)
-const CloseIcon = () => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>)
+const DEFAULT_BIO = 'Collecting moments, not things'
 
-function FilteredPhoto({ src, filter, dateStamp, onClick, className = '' }) {
+function isOlderThanOneYear(dateValue) {
+  if (!dateValue) return false
+  const source = new Date(dateValue)
+  const oneYearAgo = new Date()
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
+  return source <= oneYearAgo
+}
+
+function createInviteCode() {
+  return `VNT-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+}
+
+async function reverseGeocode(latitude, longitude) {
+  if (!latitude || !longitude) return null
+
+  try {
+    const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`)
+    if (!response.ok) return null
+    const payload = await response.json()
+    const city = payload?.address?.city || payload?.address?.town || payload?.address?.village
+    const country = payload?.address?.country
+    if (city && country) return `${city}, ${country}`
+    return country || payload?.display_name || null
+  } catch {
+    return null
+  }
+}
+
+function FilteredPhoto({ src, filter, dateStamp, className = '', onClick }) {
   const canvasRef = useRef(null)
   const [processed, setProcessed] = useState(false)
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !src) return
+
+    const context = canvas.getContext('2d')
+    const image = new Image()
+    image.crossOrigin = 'anonymous'
     setProcessed(false)
-    const ctx = canvas.getContext('2d')
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = () => { canvas.width = img.width; canvas.height = img.height; ctx.drawImage(img, 0, 0); applyFilterToCanvas(canvas, ctx, filter, dateStamp); setProcessed(true) }
-    img.src = src
+
+    image.onload = () => {
+      canvas.width = image.width
+      canvas.height = image.height
+      context.drawImage(image, 0, 0)
+      applyFilterToCanvas(canvas, context, filter, dateStamp)
+      setProcessed(true)
+    }
+
+    image.src = src
   }, [src, filter, dateStamp])
-  return (<div className={`relative ${className}`} onClick={onClick}><canvas ref={canvasRef} className={`w-full h-auto block transition-opacity duration-300 ${processed ? 'opacity-100' : 'opacity-0'}`} style={{cursor: onClick ? 'pointer' : 'default'}} />{!processed && <div className="w-full pb-[100%] bg-gray-200 shimmer" />}</div>)
+
+  return (
+    <div onClick={onClick} className={`relative ${className}`}>
+      <canvas
+        ref={canvasRef}
+        className={`w-full h-auto block transition-opacity duration-300 ${processed ? 'opacity-100' : 'opacity-0'}`}
+      />
+      {!processed && <div className="w-full pb-[100%] bg-gray-200 shimmer" />}
+    </div>
+  )
 }
 
 export default function VintageApp() {
-  const [user, setUser] = useState(null)
-  const [authMode, setAuthMode] = useState('login')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [username, setUsername] = useState('')
-  const [authError, setAuthError] = useState('')
-  const [authLoading, setAuthLoading] = useState(false)
   const [screen, setScreen] = useState('welcome')
+  const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
+  const [authMode, setAuthMode] = useState('login')
+  const [authForm, setAuthForm] = useState({ email: '', password: '', username: '', inviteCode: '' })
+  const [authError, setAuthError] = useState('')
+  const [notification, setNotification] = useState('')
+
   const [posts, setPosts] = useState([])
-  const [notification, setNotification] = useState(null)
+  const [likedPosts, setLikedPosts] = useState(new Set())
+  const [commentsByPost, setCommentsByPost] = useState({})
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [followingSet, setFollowingSet] = useState(new Set())
+  const [remainingInvites, setRemainingInvites] = useState(0)
+
   const [uploadStep, setUploadStep] = useState('select')
-  const [uploadedImage, setUploadedImage] = useState(null)
   const [uploadedFile, setUploadedFile] = useState(null)
+  const [uploadedPreview, setUploadedPreview] = useState(null)
   const [selectedFilter, setSelectedFilter] = useState('slimAarons')
   const [uploadCaption, setUploadCaption] = useState('')
   const [photoDate, setPhotoDate] = useState(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [viewingPost, setViewingPost] = useState(null)
-  const [likedPosts, setLikedPosts] = useState(new Set())
+  const [manualDate, setManualDate] = useState('')
+  const [needsManualDate, setNeedsManualDate] = useState(false)
+  const [memoryBank, setMemoryBank] = useState([])
+
+  const myPosts = useMemo(() => posts.filter((post) => post.user_id === user?.id), [posts, user?.id])
+  const onThisDay = useMemo(() => {
+    const now = new Date()
+    return memoryBank.filter((item) => {
+      const date = new Date(item.photoDate)
+      return date.getDate() === now.getDate() && date.getMonth() === now.getMonth()
+    })
+  }, [memoryBank])
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => { if (session?.user) { setUser(session.user); setScreen('feed'); loadPosts(); loadUserLikes(session.user.id) } })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => { if (session?.user) { setUser(session.user); setScreen('feed'); loadPosts(); loadUserLikes(session.user.id) } else { setUser(null); setScreen('welcome') } })
+    const timer = notification ? setTimeout(() => setNotification(''), 3000) : null
+    return () => {
+      if (timer) clearTimeout(timer)
+    }
+  }, [notification])
+
+  useEffect(() => {
+    async function initSession() {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session?.user) {
+        setUser(session.user)
+        setScreen('feed')
+      }
+    }
+
+    initSession()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setUser(session.user)
+        setScreen('feed')
+      } else {
+        setUser(null)
+        setProfile(null)
+        setScreen('welcome')
+      }
+    })
+
     return () => subscription.unsubscribe()
   }, [])
 
+  useEffect(() => {
+    if (!user) return
+    loadProfile()
+    loadFollowing()
+    loadPosts()
+    loadLikes()
+    loadRemainingInvites()
+  }, [user])
+
+  async function loadRemainingInvites() {
+    const { count } = await supabase
+      .from('invite_codes')
+      .select('id', { count: 'exact', head: true })
+      .eq('creator_id', user.id)
+      .is('used_by', null)
+    setRemainingInvites(count || 0)
+  }
+
+  async function loadProfile() {
+    const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+    setProfile(data)
+  }
+
+  async function loadFollowing() {
+    const { data } = await supabase.from('follows').select('following_id').eq('follower_id', user.id)
+    setFollowingSet(new Set((data || []).map((item) => item.following_id)))
+  }
+
+  async function loadLikes() {
+    const { data } = await supabase.from('likes').select('post_id').eq('user_id', user.id)
+    setLikedPosts(new Set((data || []).map((item) => item.post_id)))
+  }
+
   async function loadPosts() {
-    const { data: postsData, error } = await supabase.from('posts').select('*').order('created_at', { ascending: false })
-    if (error) { console.error('Error:', error); return }
-    if (postsData && postsData.length > 0) {
-      const userIds = [...new Set(postsData.map(p => p.user_id))]
-      const { data: profilesData } = await supabase.from('profiles').select('*').in('id', userIds)
-      const postsWithProfiles = postsData.map(post => ({ ...post, profiles: profilesData?.find(p => p.id === post.user_id) || { username: 'Anonymous' } }))
-      setPosts(postsWithProfiles)
-    } else { setPosts([]) }
+    const { data: follows } = await supabase.from('follows').select('following_id').eq('follower_id', user.id)
+    const visibleUserIds = [user.id, ...(follows || []).map((item) => item.following_id)]
+
+    const { data: postsData } = await supabase
+      .from('posts')
+      .select('*')
+      .in('user_id', visibleUserIds)
+      .order('created_at', { ascending: false })
+
+    const userIds = [...new Set((postsData || []).map((post) => post.user_id))]
+    const { data: profileRows } = userIds.length
+      ? await supabase.from('profiles').select('id, username, avatar_url, bio').in('id', userIds)
+      : { data: [] }
+
+    const merged = (postsData || []).map((post) => ({
+      ...post,
+      profile: profileRows.find((row) => row.id === post.user_id)
+    }))
+
+    setPosts(merged)
+
+    const { data: comments } = await supabase
+      .from('comments')
+      .select('id, post_id, text, created_at, user_id, profiles (username)')
+      .in('post_id', (postsData || []).map((post) => post.id))
+      .order('created_at', { ascending: true })
+
+    const grouped = (comments || []).reduce((acc, current) => {
+      if (!acc[current.post_id]) acc[current.post_id] = []
+      acc[current.post_id].push(current)
+      return acc
+    }, {})
+
+    setCommentsByPost(grouped)
   }
 
-  async function loadUserLikes(userId) {
-    const { data } = await supabase.from('likes').select('post_id').eq('user_id', userId)
-    if (data) { setLikedPosts(new Set(data.map(l => l.post_id))) }
+  async function createStarterInvites(creatorId) {
+    const payload = Array.from({ length: 5 }).map(() => ({ code: createInviteCode(), creator_id: creatorId }))
+    await supabase.from('invite_codes').insert(payload)
   }
 
-  function showNotification(message) { setNotification(message); setTimeout(() => setNotification(null), 2500) }
+  async function handleAuth() {
+    setAuthError('')
 
-  async function handleSignUp() {
-    setAuthLoading(true); setAuthError('')
-    const { data, error } = await supabase.auth.signUp({ email, password })
-    if (error) { setAuthError(error.message); setAuthLoading(false); return }
-    if (data.user) { await supabase.from('profiles').insert({ id: data.user.id, username: username || email.split('@')[0], bio: 'Collecting moments' }); showNotification('Welcome!'); loadPosts() }
-    setAuthLoading(false)
+    if (authMode === 'signup') {
+      const inviteCode = authForm.inviteCode.trim().toUpperCase()
+      if (!inviteCode) {
+        setAuthError('Invite code is required')
+        return
+      }
+
+      const { data: invite } = await supabase
+        .from('invite_codes')
+        .select('*')
+        .eq('code', inviteCode)
+        .is('used_by', null)
+        .single()
+
+      if (!invite) {
+        setAuthError('Invalid or already-used invite code')
+        return
+      }
+
+      const { data, error } = await supabase.auth.signUp({ email: authForm.email, password: authForm.password })
+      if (error) {
+        setAuthError(error.message)
+        return
+      }
+
+      await supabase.from('profiles').insert({
+        id: data.user.id,
+        username: authForm.username || authForm.email.split('@')[0],
+        bio: DEFAULT_BIO
+      })
+
+      await supabase.from('invite_codes').update({ used_by: data.user.id }).eq('id', invite.id)
+      await createStarterInvites(data.user.id)
+      setNotification('Welcome to VINTAGE')
+      return
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({ email: authForm.email, password: authForm.password })
+    if (error) setAuthError(error.message)
   }
 
-  async function handleLogin() {
-    setAuthLoading(true); setAuthError('')
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) { setAuthError(error.message); setAuthLoading(false); return }
-    if (data.user) { const { data: profile } = await supabase.from('profiles').select('*').eq('id', data.user.id).single(); if (!profile) { await supabase.from('profiles').insert({ id: data.user.id, username: email.split('@')[0], bio: 'Collecting moments' }) } }
-    showNotification('Welcome back!'); loadPosts(); setAuthLoading(false)
-  }
+  async function handlePickMemory(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
 
-  async function handleLogout() { await supabase.auth.signOut(); setUser(null); setScreen('welcome'); setPosts([]); setLikedPosts(new Set()) }
-
-  async function handlePhotoSelect(e) {
-    const file = e.target.files[0]; if (!file) return
     setUploadedFile(file)
-    const reader = new FileReader(); reader.onload = (event) => { setUploadedImage(event.target.result); setUploadStep('filter') }; reader.readAsDataURL(file)
-    try { const exifr = (await import('exifr')).default; const exif = await exifr.parse(file); setPhotoDate(exif?.DateTimeOriginal ? new Date(exif.DateTimeOriginal) : new Date()) } catch { setPhotoDate(new Date()) }
-  }
+    setUploadedPreview(URL.createObjectURL(file))
+    setUploadStep('filter')
 
-  async function handlePost() {
-    if (!uploadedFile || !uploadCaption.trim()) { showNotification('Please add a caption'); return }
-    showNotification('Posting...')
-    const fileName = user.id + '/' + Date.now() + '-' + uploadedFile.name
-    const { error: uploadError } = await supabase.storage.from('photos').upload(fileName, uploadedFile)
-    if (uploadError) { showNotification('Failed to upload'); return }
-    const { data: { publicUrl } } = supabase.storage.from('photos').getPublicUrl(fileName)
-    const { error: postError } = await supabase.from('posts').insert({ user_id: user.id, image_url: publicUrl, caption: uploadCaption, filter: selectedFilter, photo_date: photoDate?.toISOString(), date_stamp: formatDateStamp(photoDate || new Date()) })
-    if (postError) { showNotification('Failed to post'); return }
-    setUploadedImage(null); setUploadedFile(null); setUploadCaption(''); setUploadStep('select'); setSelectedFilter('slimAarons'); setPhotoDate(null); setScreen('feed'); loadPosts(); showNotification('Memory posted!')
-  }
+    try {
+      const exifr = (await import('exifr')).default
+      const exif = await exifr.parse(file)
+      const parsedDate = exif?.DateTimeOriginal ? new Date(exif.DateTimeOriginal) : null
 
-  async function handleLike(postId) {
-    const alreadyLiked = likedPosts.has(postId)
-    const post = posts.find(p => p.id === postId)
-    if (alreadyLiked) {
-      await supabase.from('likes').delete().eq('user_id', user.id).eq('post_id', postId)
-      await supabase.from('posts').update({ likes: Math.max(0, (post.likes || 1) - 1) }).eq('id', postId)
-      setLikedPosts(prev => { const next = new Set(prev); next.delete(postId); return next })
-      setPosts(posts.map(p => p.id === postId ? { ...p, likes: Math.max(0, (p.likes || 1) - 1) } : p))
-    } else {
-      await supabase.from('likes').insert({ user_id: user.id, post_id: postId })
-      await supabase.from('posts').update({ likes: (post.likes || 0) + 1 }).eq('id', postId)
-      setLikedPosts(prev => new Set(prev).add(postId))
-      setPosts(posts.map(p => p.id === postId ? { ...p, likes: (p.likes || 0) + 1 } : p))
+      if (!parsedDate) {
+        setNeedsManualDate(true)
+        setPhotoDate(null)
+        setNotification('No EXIF date found. Please enter memory date manually.')
+        return
+      }
+
+      if (!isOlderThanOneYear(parsedDate)) {
+        setNotification('This memory needs more time. VINTAGE is for photos at least one year old.')
+        setUploadStep('select')
+        return
+      }
+
+      setNeedsManualDate(false)
+      setPhotoDate(parsedDate)
+    } catch {
+      setNeedsManualDate(true)
+      setPhotoDate(null)
     }
   }
 
-  async function handleDelete(postId) {
-    if (!confirm('Delete this memory?')) return
-    const post = posts.find(p => p.id === postId)
-    if (post.user_id !== user.id) return
-    await supabase.from('posts').delete().eq('id', postId)
-    setPosts(posts.filter(p => p.id !== postId))
-    setViewingPost(null)
-    showNotification('Memory deleted')
+  async function importMemoryBank(event) {
+    const files = Array.from(event.target.files || [])
+    if (!files.length) return
+
+    const exifr = (await import('exifr')).default
+    const loaded = await Promise.all(files.map(async (file) => {
+      let exif = null
+      try {
+        exif = await exifr.parse(file)
+      } catch {
+        exif = null
+      }
+
+      const photoDate = exif?.DateTimeOriginal || new Date(file.lastModified)
+      const locationName = await reverseGeocode(exif?.latitude, exif?.longitude)
+
+      return {
+        id: `${file.name}-${file.lastModified}`,
+        objectUrl: URL.createObjectURL(file),
+        filename: file.name,
+        photoDate,
+        locationName
+      }
+    }))
+
+    setMemoryBank((prev) => [...loaded, ...prev].sort((a, b) => new Date(b.photoDate) - new Date(a.photoDate)))
+    setNotification('Memories indexed locally')
   }
 
-  function handleStoryExport(post) { showNotification('Creating Story...'); generateStoryImage(post.image_url, post.filter, post.date_stamp, (blob) => { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'vintage-' + post.date_stamp.replace(/\//g, '-') + '.png'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); showNotification('Saved!') }) }
+  async function handleCreatePost() {
+    if (!uploadedFile) return
 
-  function PostCard({ post, showDelete = false }) {
-    const isLiked = likedPosts.has(post.id)
-    return (
-      <div className="bg-white rounded-lg p-3 mb-5 shadow-sm">
-        <div className="flex items-center mb-3">
-          <div className="w-8 h-8 rounded-full bg-gray-300 mr-3 flex items-center justify-center text-sm">{post.profiles?.username?.charAt(0).toUpperCase() || '?'}</div>
-          <span className="font-semibold text-sm">{post.profiles?.username || 'Anonymous'}</span>
-          {showDelete && post.user_id === user?.id && <button onClick={() => handleDelete(post.id)} className="ml-auto text-red-400 hover:text-red-600"><TrashIcon /></button>}
-        </div>
-        <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden mb-3" />
-        <div className="flex items-center gap-4 mb-2">
-          <button onClick={() => handleLike(post.id)} className={`text-xl ${isLiked ? 'text-red-500' : ''}`}>{isLiked ? '♥' : '♡'}</button>
-          <button onClick={() => handleStoryExport(post)} className="ml-auto flex items-center gap-1 text-xs text-vintage-muted"><ShareIcon /> STORY</button>
-        </div>
-        <p className="text-sm font-medium mb-1">{post.likes || 0} likes</p>
-        <p className="text-sm"><span className="font-semibold mr-2">{post.profiles?.username}</span>{post.caption}</p>
-      </div>
-    )
+    const effectiveDate = needsManualDate ? new Date(manualDate) : photoDate
+    if (!effectiveDate || Number.isNaN(effectiveDate.getTime())) {
+      setNotification('Add a valid memory date')
+      return
+    }
+
+    if (!isOlderThanOneYear(effectiveDate)) {
+      setNotification('This memory needs more time. VINTAGE is for photos at least one year old.')
+      return
+    }
+
+    const fileName = `${user.id}/${Date.now()}-${uploadedFile.name}`
+    const { error: uploadError } = await supabase.storage.from('photos').upload(fileName, uploadedFile)
+    if (uploadError) {
+      setNotification('Upload failed')
+      return
+    }
+
+    const { data: { publicUrl } } = supabase.storage.from('photos').getPublicUrl(fileName)
+
+    const { error: postError } = await supabase.from('posts').insert({
+      user_id: user.id,
+      image_url: publicUrl,
+      caption: uploadCaption,
+      filter: selectedFilter,
+      photo_date: effectiveDate.toISOString(),
+      date_stamp: formatDateStamp(effectiveDate)
+    })
+
+    if (postError) {
+      setNotification('Post failed')
+      return
+    }
+
+    setUploadStep('select')
+    setUploadedFile(null)
+    setUploadedPreview(null)
+    setUploadCaption('')
+    setPhotoDate(null)
+    setManualDate('')
+    setNeedsManualDate(false)
+    setScreen('feed')
+    setNotification('Memory posted')
+    loadPosts()
+  }
+
+  async function handleLike(post) {
+    const liked = likedPosts.has(post.id)
+    if (liked) {
+      await supabase.from('likes').delete().eq('user_id', user.id).eq('post_id', post.id)
+      await supabase.from('posts').update({ likes: Math.max((post.likes || 1) - 1, 0) }).eq('id', post.id)
+    } else {
+      await supabase.from('likes').insert({ user_id: user.id, post_id: post.id })
+      await supabase.from('posts').update({ likes: (post.likes || 0) + 1 }).eq('id', post.id)
+    }
+
+    await loadLikes()
+    await loadPosts()
+  }
+
+  async function handleComment(postId, text) {
+    if (!text.trim()) return
+    await supabase.from('comments').insert({ user_id: user.id, post_id: postId, text: text.trim() })
+    loadPosts()
+  }
+
+  async function handleSearch() {
+    if (!searchQuery.trim()) {
+      setSearchResults([])
+      return
+    }
+
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, username, bio, avatar_url')
+      .ilike('username', `%${searchQuery.trim()}%`)
+      .limit(20)
+
+    setSearchResults(data || [])
+  }
+
+  async function toggleFollow(targetUserId) {
+    if (followingSet.has(targetUserId)) {
+      await supabase.from('follows').delete().eq('follower_id', user.id).eq('following_id', targetUserId)
+    } else {
+      await supabase.from('follows').insert({ follower_id: user.id, following_id: targetUserId })
+    }
+
+    loadFollowing()
+    loadPosts()
+  }
+
+  async function saveProfile() {
+    if (!profile?.username?.trim()) {
+      setNotification('Username required')
+      return
+    }
+
+    await supabase
+      .from('profiles')
+      .update({ username: profile.username.trim(), bio: profile.bio || DEFAULT_BIO })
+      .eq('id', user.id)
+
+    setNotification('Profile updated')
+  }
+
+  async function exportStory(post) {
+    setNotification('Preparing story export...')
+    generateStoryImage(post.image_url, post.filter, post.date_stamp, (blob) => {
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `vintage-story-${post.date_stamp}.png`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      setNotification('Story image saved')
+    })
   }
 
   return (
-    <div className="min-h-screen relative pb-[70px]">
-      {notification && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-vintage-charcoal text-white px-6 py-3 rounded text-sm z-[1000] shadow-lg">{notification}</div>}
-      
-      {viewingPost && (
-        <div className="fixed inset-0 bg-black bg-opacity-90 z-[999] flex items-center justify-center p-4">
-          <div className="max-w-lg w-full max-h-[90vh] overflow-y-auto">
-            <button onClick={() => setViewingPost(null)} className="absolute top-4 right-4 text-white"><CloseIcon /></button>
-            <PostCard post={viewingPost} showDelete={true} />
-          </div>
-        </div>
-      )}
+    <div className="min-h-screen pb-24">
+      {notification && <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-vintage-charcoal text-white px-4 py-2 rounded">{notification}</div>}
 
       {screen === 'welcome' && (
-        <div className="min-h-screen flex flex-col justify-center p-8 text-center fade-in">
-          <div className="mb-10"><svg className="w-20 h-20 mx-auto mb-5" viewBox="0 0 32 32" fill="none"><rect x="4" y="4" width="24" height="24" stroke="#2C2C2C" strokeWidth="1.5" fill="none"/><rect x="6" y="6" width="20" height="16" fill="#D4D4D4"/><rect x="6" y="22" width="20" height="6" fill="white" stroke="#2C2C2C" strokeWidth="0.5"/></svg></div>
-          <h1 className="text-4xl tracking-[6px] mb-4 font-light">VINTAGE</h1>
-          <p className="text-vintage-muted italic mb-10">A museum for your memories</p>
-          <div className="space-y-4 max-w-xs mx-auto w-full">
-            {authMode === 'signup' && <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full p-4 border border-gray-300 rounded font-serif text-sm bg-white" />}
-            <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full p-4 border border-gray-300 rounded font-serif text-sm bg-white" />
-            <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-4 border border-gray-300 rounded font-serif text-sm bg-white" />
-            {authError && <p className="text-red-500 text-sm">{authError}</p>}
-            <button onClick={authMode === 'login' ? handleLogin : handleSignUp} disabled={authLoading} className="w-full p-4 bg-vintage-charcoal text-white tracking-[2px] text-sm disabled:opacity-50">{authLoading ? 'LOADING...' : authMode === 'login' ? 'ENTER' : 'CREATE ACCOUNT'}</button>
-            <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-vintage-muted text-sm underline">{authMode === 'login' ? 'Need an account? Sign up' : 'Have an account? Log in'}</button>
+        <section className="min-h-screen flex flex-col justify-center max-w-md mx-auto px-8 text-center fade-in">
+          <h1 className="text-5xl tracking-[7px] mb-4">VINTAGE</h1>
+          <p className="italic text-vintage-muted mb-2">The future is retro.</p>
+          <p className="italic text-vintage-muted mb-8">A museum for your memories</p>
+          <div className="space-y-3">
+            {authMode === 'signup' && (
+              <>
+                <input className="w-full p-3 border rounded bg-white" placeholder="Username" value={authForm.username} onChange={(event) => setAuthForm({ ...authForm, username: event.target.value })} />
+                <input className="w-full p-3 border rounded bg-white uppercase" placeholder="Invite code" value={authForm.inviteCode} onChange={(event) => setAuthForm({ ...authForm, inviteCode: event.target.value })} />
+              </>
+            )}
+            <input className="w-full p-3 border rounded bg-white" type="email" placeholder="Email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} />
+            <input className="w-full p-3 border rounded bg-white" type="password" placeholder="Password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} />
+            {authError && <p className="text-sm text-red-600">{authError}</p>}
+            <button onClick={handleAuth} className="w-full p-3 bg-vintage-charcoal text-white tracking-[2px]">{authMode === 'login' ? 'ENTER MUSEUM' : 'CREATE ACCOUNT'}</button>
+            <button className="underline text-sm" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>{authMode === 'login' ? 'Need an invite?' : 'Already have an account?'}</button>
           </div>
-        </div>
+        </section>
       )}
-      {screen !== 'welcome' && user && (
+
+      {user && screen !== 'welcome' && (
         <>
-          <div className="sticky top-0 z-50 bg-vintage-cream border-b border-gray-300 p-5"><div className="flex items-center justify-center gap-3"><svg className="w-8 h-8" viewBox="0 0 32 32" fill="none"><rect x="4" y="4" width="24" height="24" stroke="#2C2C2C" strokeWidth="1.5" fill="none"/><rect x="6" y="6" width="20" height="16" fill="#D4D4D4"/><rect x="6" y="22" width="20" height="6" fill="white" stroke="#2C2C2C" strokeWidth="0.5"/></svg><span className="text-xl font-light tracking-[4px]">VINTAGE</span></div></div>
-          {screen === 'feed' && (
-            <div className="p-4 fade-in">
-              {posts.map(post => <PostCard key={post.id} post={post} />)}
-              {posts.length === 0 && <div className="text-center py-20 text-vintage-muted"><p className="mb-4">No memories yet</p><button onClick={() => setScreen('upload')} className="text-vintage-charcoal underline">Post your first memory</button></div>}
+          <header className="sticky top-0 bg-vintage-cream border-b p-4 z-30">
+            <div className="max-w-xl mx-auto flex justify-between items-center">
+              <h2 className="tracking-[4px] text-xl">VINTAGE</h2>
+              <button className="text-sm underline" onClick={loadPosts}>Refresh</button>
             </div>
-          )}
-          {screen === 'upload' && (
-            <div className="p-5 fade-in">
-              <h2 className="text-xl mb-5">Add Memory</h2>
-              {uploadStep === 'select' && <label className="block border-2 border-dashed border-gray-300 rounded-lg p-10 text-center cursor-pointer"><input type="file" accept="image/*" onChange={handlePhotoSelect} className="hidden" /><div className="text-4xl mb-3">📷</div><p className="text-vintage-muted">Tap to select a photo</p></label>}
-              {uploadStep === 'filter' && uploadedImage && (
-                <>
-                  <FilteredPhoto src={uploadedImage} filter={selectedFilter} dateStamp={formatDateStamp(photoDate || new Date())} className="rounded-lg overflow-hidden mb-5" />
-                  <div className="flex gap-2 overflow-x-auto pb-3 mb-5">{Object.entries(FILTERS).map(([key, filter]) => (<button key={key} onClick={() => setSelectedFilter(key)} className={`flex-shrink-0 px-4 py-2 rounded text-xs ${selectedFilter === key ? 'bg-vintage-charcoal text-white' : 'bg-gray-200'}`}>{filter.name}</button>))}</div>
-                  <input type="text" placeholder="Add a caption..." value={uploadCaption} onChange={(e) => setUploadCaption(e.target.value)} className="w-full p-4 border border-gray-300 rounded mb-4 font-serif text-sm" />
-                  <button onClick={handlePost} className="w-full p-4 bg-vintage-charcoal text-white tracking-[2px] text-sm rounded">POST MEMORY</button>
-                </>
-              )}
+          </header>
+
+          <main className="max-w-xl mx-auto p-4 fade-in">
+            {screen === 'feed' && (
+              <div className="space-y-5">
+                {posts.length === 0 && <p className="text-vintage-muted text-center py-16">Follow friends to fill your museum feed.</p>}
+                {posts.map((post) => (
+                  <article key={post.id} className="bg-white p-3 rounded-lg shadow-sm">
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <p className="font-semibold">{post.profile?.username || 'anonymous'}</p>
+                        <p className="text-xs text-vintage-muted">{new Date(post.created_at).toLocaleDateString()}</p>
+                      </div>
+                      <button className="text-xs underline" onClick={() => exportStory(post)}>Story export</button>
+                    </div>
+                    <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden" />
+                    <div className="flex items-center justify-between mt-2">
+                      <button onClick={() => handleLike(post)}>{likedPosts.has(post.id) ? '♥' : '♡'} {post.likes || 0}</button>
+                    </div>
+                    <p className="mt-2"><span className="font-semibold mr-2">{post.profile?.username}</span>{post.caption}</p>
+                    <Comments comments={commentsByPost[post.id] || []} onSubmit={(text) => handleComment(post.id, text)} />
+                  </article>
+                ))}
+              </div>
+            )}
+
+            {screen === 'upload' && (
+              <section className="space-y-4">
+                <h3 className="text-xl">Add memory</h3>
+                {uploadStep === 'select' && (
+                  <label className="block border-2 border-dashed rounded-lg p-10 text-center bg-white cursor-pointer">
+                    <input type="file" accept="image/*" onChange={handlePickMemory} className="hidden" />
+                    Select a photo at least one year old
+                  </label>
+                )}
+
+                {uploadStep === 'filter' && uploadedPreview && (
+                  <>
+                    <FilteredPhoto src={uploadedPreview} filter={selectedFilter} dateStamp={formatDateStamp(photoDate || manualDate || new Date())} className="rounded overflow-hidden" />
+                    <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                      {Object.entries(FILTERS).map(([key, filter]) => (
+                        <button key={key} className={`px-3 py-2 rounded text-sm ${selectedFilter === key ? 'bg-vintage-charcoal text-white' : 'bg-white border'}`} onClick={() => setSelectedFilter(key)}>{filter.name}</button>
+                      ))}
+                    </div>
+                    {needsManualDate && (
+                      <input type="date" className="w-full p-3 border rounded bg-white" value={manualDate} onChange={(event) => setManualDate(event.target.value)} />
+                    )}
+                    <input value={uploadCaption} onChange={(event) => setUploadCaption(event.target.value)} className="w-full p-3 border rounded bg-white" placeholder="Location, year..." />
+                    <button className="w-full p-3 bg-vintage-charcoal text-white" onClick={handleCreatePost}>Post memory</button>
+                  </>
+                )}
+
+                <div className="bg-white p-4 rounded-lg border">
+                  <h4 className="font-semibold mb-2">Memories browser</h4>
+                  <label className="inline-block text-sm underline cursor-pointer mb-4">
+                    Index local photos
+                    <input type="file" multiple accept="image/*" onChange={importMemoryBank} className="hidden" />
+                  </label>
+                  <p className="text-sm text-vintage-muted mb-2">On this day</p>
+                  <div className="grid grid-cols-3 gap-2 mb-4">
+                    {onThisDay.slice(0, 6).map((item) => (
+                      <img key={item.id} src={item.objectUrl} alt={item.filename} className="w-full aspect-square object-cover rounded" />
+                    ))}
+                  </div>
+                  <p className="text-sm text-vintage-muted mb-2">Timeline</p>
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    {memoryBank.map((item) => (
+                      <div key={item.id} className="flex gap-3 items-center">
+                        <img src={item.objectUrl} alt={item.filename} className="w-12 h-12 rounded object-cover" />
+                        <div>
+                          <p className="text-sm">{new Date(item.photoDate).toLocaleDateString()} {item.locationName ? `— ${item.locationName}` : ''}</p>
+                          <p className="text-xs text-vintage-muted">{item.filename}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {screen === 'search' && (
+              <section>
+                <div className="flex gap-2 mb-3">
+                  <input className="flex-1 p-3 border rounded bg-white" placeholder="Search usernames" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} />
+                  <button className="px-4 bg-vintage-charcoal text-white rounded" onClick={handleSearch}>Go</button>
+                </div>
+                <div className="space-y-3">
+                  {searchResults.map((result) => (
+                    <div key={result.id} className="bg-white p-3 rounded flex justify-between items-center">
+                      <div>
+                        <p className="font-semibold">{result.username}</p>
+                        <p className="text-sm text-vintage-muted">{result.bio || DEFAULT_BIO}</p>
+                      </div>
+                      {result.id !== user.id && (
+                        <button className="text-sm underline" onClick={() => toggleFollow(result.id)}>{followingSet.has(result.id) ? 'Unfollow' : 'Follow'}</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {screen === 'profile' && profile && (
+              <section className="space-y-4">
+                <h3 className="text-xl">Profile</h3>
+                <div className="bg-white p-4 rounded-lg space-y-2">
+                  <input className="w-full p-2 border rounded" value={profile.username || ''} onChange={(event) => setProfile({ ...profile, username: event.target.value })} />
+                  <textarea className="w-full p-2 border rounded" rows={3} value={profile.bio || ''} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} />
+                  <button className="text-sm underline" onClick={saveProfile}>Save profile</button>
+                </div>
+                <div className="grid grid-cols-4 text-center bg-white rounded p-3">
+                  <Stat label="Posts" value={myPosts.length} />
+                  <Stat label="Followers" value={0} />
+                  <Stat label="Following" value={followingSet.size} />
+                  <Stat label="Invites" value={remainingInvites} />
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {myPosts.map((post) => (
+                    <FilteredPhoto key={post.id} src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden" />
+                  ))}
+                </div>
+                <button className="underline text-sm" onClick={() => supabase.auth.signOut()}>Log out</button>
+              </section>
+            )}
+          </main>
+
+          <nav className="fixed bottom-0 left-0 right-0 border-t bg-vintage-cream">
+            <div className="max-w-xl mx-auto grid grid-cols-4 text-center text-sm">
+              <button className="p-4" onClick={() => setScreen('feed')}>Feed</button>
+              <button className="p-4" onClick={() => setScreen('search')}>Search</button>
+              <button className="p-4" onClick={() => setScreen('upload')}>Upload</button>
+              <button className="p-4" onClick={() => setScreen('profile')}>Profile</button>
             </div>
-          )}
-          {screen === 'profile' && (
-            <div className="p-5 fade-in">
-              <div className="text-center mb-8"><div className="w-20 h-20 rounded-full bg-gray-300 mx-auto mb-4 flex items-center justify-center text-3xl">{user?.email?.charAt(0).toUpperCase()}</div><p className="font-semibold">{user?.email?.split('@')[0]}</p><p className="text-sm text-vintage-muted italic">Collecting moments</p></div>
-              <div className="flex justify-center gap-10 py-5 border-y border-gray-300 mb-5"><div className="text-center"><p className="text-xl font-semibold">{posts.filter(p => p.user_id === user?.id).length}</p><p className="text-xs text-vintage-muted uppercase">Posts</p></div><div className="text-center"><p className="text-xl font-semibold">0</p><p className="text-xs text-vintage-muted uppercase">Followers</p></div><div className="text-center"><p className="text-xl font-semibold">0</p><p className="text-xs text-vintage-muted uppercase">Following</p></div></div>
-              <div className="grid grid-cols-3 gap-1">{posts.filter(p => p.user_id === user?.id).map(post => (<div key={post.id} className="aspect-square overflow-hidden cursor-pointer" onClick={() => setViewingPost(post)}><FilteredPhoto src={post.image_url} filter={post.filter} className="h-full object-cover" /></div>))}</div>
-              <button onClick={handleLogout} className="w-full mt-8 p-3 border border-vintage-charcoal rounded text-sm">Log Out</button>
-            </div>
-          )}
-          {screen === 'search' && <div className="p-5"><input type="text" placeholder="Search users..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full p-4 border border-gray-300 rounded mb-5 font-serif text-sm" /><p className="text-center text-vintage-muted">Coming soon</p></div>}
-          {screen === 'messages' && <div className="p-5"><h2 className="text-xl mb-5">Messages</h2><p className="text-center text-vintage-muted py-10">Coming soon</p></div>}
-          <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[430px] bg-vintage-cream border-t border-gray-300 flex justify-around py-4 z-50">
-            <button onClick={() => { setScreen('feed'); loadPosts() }} className={`p-1 ${screen === 'feed' ? 'opacity-100' : 'opacity-40'}`}><HomeIcon active={screen === 'feed'} /></button>
-            <button onClick={() => setScreen('search')} className={`p-1 ${screen === 'search' ? 'opacity-100' : 'opacity-40'}`}><SearchIcon active={screen === 'search'} /></button>
-            <button onClick={() => { setScreen('upload'); setUploadStep('select'); setUploadedImage(null) }} className={`p-1 ${screen === 'upload' ? 'opacity-100' : 'opacity-40'}`}><PlusIcon active={screen === 'upload'} /></button>
-            <button onClick={() => setScreen('messages')} className={`p-1 ${screen === 'messages' ? 'opacity-100' : 'opacity-40'}`}><MessageIcon active={screen === 'messages'} /></button>
-            <button onClick={() => setScreen('profile')} className={`p-1 ${screen === 'profile' ? 'opacity-100' : 'opacity-40'}`}><ProfileIcon active={screen === 'profile'} /></button>
-          </div>
+          </nav>
         </>
       )}
+    </div>
+  )
+}
+
+function Stat({ label, value }) {
+  return (
+    <div>
+      <p className="text-lg font-semibold">{value}</p>
+      <p className="text-xs text-vintage-muted uppercase">{label}</p>
+    </div>
+  )
+}
+
+function Comments({ comments, onSubmit }) {
+  const [text, setText] = useState('')
+
+  return (
+    <div className="mt-3 pt-2 border-t">
+      <div className="space-y-1 mb-2">
+        {comments.slice(-3).map((comment) => (
+          <p key={comment.id} className="text-sm"><span className="font-semibold mr-1">{comment.profiles?.username || 'user'}</span>{comment.text}</p>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          className="flex-1 border rounded px-2 py-1 text-sm"
+          placeholder="Write a comment"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+        <button
+          className="text-sm underline"
+          onClick={() => {
+            onSubmit(text)
+            setText('')
+          }}
+        >
+          Post
+        </button>
+      </div>
     </div>
   )
 }

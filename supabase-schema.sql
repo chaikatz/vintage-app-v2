@@ -48,12 +48,22 @@ CREATE TABLE comments (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Invite-only onboarding
+CREATE TABLE invite_codes (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,
+  creator_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
+  used_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Enable Row Level Security
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
 ALTER TABLE likes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invite_codes ENABLE ROW LEVEL SECURITY;
 
 -- Profiles policies
 CREATE POLICY "Public profiles are viewable by everyone" ON profiles
@@ -107,6 +117,17 @@ CREATE POLICY "Users can create comments" ON comments
 
 CREATE POLICY "Users can delete own comments" ON comments
   FOR DELETE USING (auth.uid() = user_id);
+
+-- Invite code policies
+CREATE POLICY "Users can view own invite codes" ON invite_codes
+  FOR SELECT USING (auth.uid() = creator_id OR auth.uid() = used_by);
+
+CREATE POLICY "Users can create own invite codes" ON invite_codes
+  FOR INSERT WITH CHECK (auth.uid() = creator_id);
+
+CREATE POLICY "Users can redeem invite codes" ON invite_codes
+  FOR UPDATE USING (used_by IS NULL)
+  WITH CHECK (used_by = auth.uid());
 
 -- Create storage bucket for photos
 INSERT INTO storage.buckets (id, name, public) VALUES ('photos', 'photos', true);
