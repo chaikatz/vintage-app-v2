@@ -118,6 +118,7 @@ export default function VintageApp() {
   const [followingSet, setFollowingSet] = useState(new Set())
   const [viewedProfile, setViewedProfile] = useState(null)
   const [viewedProfilePosts, setViewedProfilePosts] = useState([])
+  const [viewedProfileViewMode, setViewedProfileViewMode] = useState('photoAgeOldest')
 
   const [uploadStep, setUploadStep] = useState('select')
   const [uploadedFile, setUploadedFile] = useState(null)
@@ -174,6 +175,33 @@ export default function VintageApp() {
     })
     return [...clusters.values()]
   }, [myPosts])
+
+  const sortedViewedProfilePosts = useMemo(() => {
+    const copy = [...viewedProfilePosts]
+    if (viewedProfileViewMode === 'classic') {
+      return copy.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    }
+    if (viewedProfileViewMode === 'photoAgeNewest') {
+      return copy.sort((a, b) => new Date(b.photo_date || b.created_at) - new Date(a.photo_date || a.created_at))
+    }
+    if (viewedProfileViewMode === 'photoAgeOldest') {
+      return copy.sort((a, b) => new Date(a.photo_date || a.created_at) - new Date(b.photo_date || b.created_at))
+    }
+    return copy
+  }, [viewedProfilePosts, viewedProfileViewMode])
+
+  const viewedProfileThreadItems = useMemo(() => buildThreadItems(sortedViewedProfilePosts), [sortedViewedProfilePosts])
+
+  const viewedProfileMapClusters = useMemo(() => {
+    const source = viewedProfilePosts.filter((post) => post.latitude && post.longitude)
+    const clusters = new Map()
+    source.forEach((post) => {
+      const key = `${post.latitude.toFixed(1)}:${post.longitude.toFixed(1)}`
+      if (!clusters.has(key)) clusters.set(key, [])
+      clusters.get(key).push(post)
+    })
+    return [...clusters.values()]
+  }, [viewedProfilePosts])
 
   const onThisDay = useMemo(() => {
     const now = new Date()
@@ -643,6 +671,7 @@ export default function VintageApp() {
 
     setViewedProfile(foundProfile)
     setViewedProfilePosts(foundPosts || [])
+    setViewedProfileViewMode('photoAgeOldest')
     setScreen('viewedProfile')
   }
 
@@ -868,14 +897,48 @@ export default function VintageApp() {
                   <p className="text-[13px] text-[#888] italic mt-1">{viewedProfile.bio || DEFAULT_BIO}</p>
                   <p className="text-[12px] text-[#999] mt-1">{viewedProfilePosts.length} memories</p>
                 </div>
-                <ThreadTimeline
-                  items={buildThreadItems(viewedProfilePosts)}
-                  commentsByPost={commentsByPost}
-                  onOpenPost={(post) => setSelectedProfilePost({ ...post, profile: viewedProfile })}
-                  currentUserId={user?.id}
-                  onDeletePost={handleDeletePost}
-                  canDelete={false}
-                />
+
+                <div className="flex flex-wrap gap-2 justify-center">
+                  <button className={`px-4 h-[30px] rounded-full text-[11px] ${viewedProfileViewMode === 'classic' ? 'bg-vintage-charcoal text-white' : 'border border-[#D4D4D4] text-[#888]'}`} onClick={() => setViewedProfileViewMode('classic')}>Classic</button>
+                  <button className={`px-4 h-[30px] rounded-full text-[11px] ${viewedProfileViewMode === 'photoAgeNewest' ? 'bg-vintage-charcoal text-white' : 'border border-[#D4D4D4] text-[#888]'}`} onClick={() => setViewedProfileViewMode('photoAgeNewest')}>Newest</button>
+                  <button className={`px-4 h-[30px] rounded-full text-[11px] ${viewedProfileViewMode === 'photoAgeOldest' ? 'bg-vintage-charcoal text-white' : 'border border-[#D4D4D4] text-[#888]'}`} onClick={() => setViewedProfileViewMode('photoAgeOldest')}>Oldest</button>
+                  <button className={`px-4 h-[30px] rounded-full text-[11px] ${viewedProfileViewMode === 'mapView' ? 'bg-vintage-charcoal text-white' : 'border border-[#D4D4D4] text-[#888]'}`} onClick={() => setViewedProfileViewMode('mapView')}>Map</button>
+                </div>
+
+                {viewedProfileViewMode === 'classic' && (
+                  <div className="grid grid-cols-3 gap-[2px]">
+                    {sortedViewedProfilePosts.map((post) => (
+                      <button key={post.id} className="text-left w-full" onClick={() => setSelectedProfilePost({ ...post, profile: viewedProfile })}>
+                        <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {(viewedProfileViewMode === 'photoAgeNewest' || viewedProfileViewMode === 'photoAgeOldest') && (
+                  <ThreadTimeline
+                    items={viewedProfileThreadItems}
+                    commentsByPost={commentsByPost}
+                    onOpenPost={(post) => setSelectedProfilePost({ ...post, profile: viewedProfile })}
+                    currentUserId={user?.id}
+                    onDeletePost={handleDeletePost}
+                    canDelete={false}
+                  />
+                )}
+
+                {viewedProfileViewMode === 'mapView' && (
+                  <div className="bg-white border rounded-xl p-4">
+                    <p className="text-sm text-vintage-muted mb-2">Map clusters (tap a cluster to view a memory)</p>
+                    <div className="relative w-full aspect-square rounded-full border border-[#ece9df] bg-[#faf9f4] overflow-hidden">
+                      {viewedProfileMapClusters.map((cluster, idx) => {
+                        const sample = cluster[0]
+                        const top = 50 - ((sample.latitude || 0) / 90) * 40
+                        const left = 50 + ((sample.longitude || 0) / 180) * 45
+                        return <button key={cluster[0].id + idx} style={{ top: `${top}%`, left: `${left}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-[#D4AF37] text-white rounded-full w-9 h-9 text-xs" onClick={() => setSelectedProfilePost({ ...sample, profile: viewedProfile })}>{cluster.length}</button>
+                      })}
+                    </div>
+                  </div>
+                )}
               </section>
             )}
 
