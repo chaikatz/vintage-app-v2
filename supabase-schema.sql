@@ -19,6 +19,9 @@ CREATE TABLE posts (
   filter TEXT DEFAULT 'slimAarons',
   photo_date TIMESTAMP WITH TIME ZONE,
   date_stamp TEXT,
+  latitude DOUBLE PRECISION,
+  longitude DOUBLE PRECISION,
+  location_name TEXT,
   likes INTEGER DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -141,3 +144,9 @@ CREATE POLICY "Authenticated users can upload photos" ON storage.objects
 
 CREATE POLICY "Users can delete own photos" ON storage.objects
   FOR DELETE USING (bucket_id = 'photos' AND auth.uid()::text = (storage.foldername(name))[1]);
+
+
+-- Backfill-safe alters for existing projects
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS location_name TEXT;
