@@ -108,6 +108,8 @@ export default function VintageApp() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [followingSet, setFollowingSet] = useState(new Set())
+  const [viewedProfile, setViewedProfile] = useState(null)
+  const [viewedProfilePosts, setViewedProfilePosts] = useState([])
 
   const [uploadStep, setUploadStep] = useState('select')
   const [uploadedFile, setUploadedFile] = useState(null)
@@ -623,6 +625,15 @@ export default function VintageApp() {
     setSearchResults(data || [])
   }
 
+  async function openProfileFromSearch(userId) {
+    const { data: foundProfile } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    const { data: foundPosts } = await supabase.from('posts').select('*').eq('user_id', userId).order('photo_date', { ascending: true })
+
+    setViewedProfile(foundProfile)
+    setViewedProfilePosts(foundPosts || [])
+    setScreen('viewedProfile')
+  }
+
   async function toggleFollow(targetUserId) {
     if (followingSet.has(targetUserId)) {
       await supabase.from('follows').delete().eq('follower_id', user.id).eq('following_id', targetUserId)
@@ -737,7 +748,9 @@ export default function VintageApp() {
                         {post.user_id === user?.id && <button className="text-xs text-red-500 underline" onClick={() => handleDeletePost(post.id)}>Delete</button>}
                       </div>
                     </div>
-                    <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden" />
+                    <div onDoubleClick={() => handleLike(post)}>
+                      <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden" />
+                    </div>
                     <div className="flex items-center justify-between mt-2"><button onClick={() => handleLike(post)}>{likedPosts.has(post.id) ? '♥' : '♡'} {post.likes || 0}</button><span className="text-xs text-vintage-muted">{(commentsByPost[post.id] || []).length} comments</span></div>
                     <p className="mt-2"><span className="font-semibold mr-2">{post.profile?.username}</span>{post.caption}</p>
                     <div className="mt-3 pt-2 border-t">
@@ -810,7 +823,7 @@ export default function VintageApp() {
             {screen === 'search' && (
               <section>
                 <div className="flex gap-2 mb-3"><input className="flex-1 p-3 border rounded bg-white" placeholder="Search usernames" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} /><button className="px-4 bg-vintage-charcoal text-white rounded" onClick={handleSearch}>Go</button></div>
-                <div className="space-y-3">{searchResults.map((result) => <div key={result.id} className="bg-white p-3 rounded flex justify-between items-center"><div><p className="font-semibold">{result.username}</p><p className="text-sm text-vintage-muted">{result.bio || DEFAULT_BIO}</p></div>{result.id !== user.id && <button className="text-sm underline" onClick={() => toggleFollow(result.id)}>{followingSet.has(result.id) ? 'Unfollow' : 'Follow'}</button>}</div>)}</div>
+                <div className="space-y-3">{searchResults.map((result) => <div key={result.id} className="bg-white p-3 rounded flex justify-between items-center"><button className="text-left flex-1" onClick={() => openProfileFromSearch(result.id)}><p className="font-semibold">{result.username}</p><p className="text-sm text-vintage-muted">{result.bio || DEFAULT_BIO}</p></button>{result.id !== user.id && <button className="text-sm underline" onClick={() => toggleFollow(result.id)}>{followingSet.has(result.id) ? 'Unfollow' : 'Follow'}</button>}</div>)}</div>
               </section>
             )}
 
@@ -835,12 +848,32 @@ export default function VintageApp() {
               </section>
             )}
 
+            {screen === 'viewedProfile' && viewedProfile && (
+              <section className="space-y-4">
+                <button className="text-sm underline" onClick={() => setScreen('search')}>← Back to search</button>
+                <div className="bg-white p-5 rounded-xl border border-[#ece9df]">
+                  <p className="text-xl">{viewedProfile.username}</p>
+                  <p className="text-sm text-vintage-muted italic mt-1">{viewedProfile.bio || DEFAULT_BIO}</p>
+                </div>
+                <div className="space-y-5 relative before:content-[''] before:absolute before:left-3 before:top-0 before:bottom-0 before:w-px before:bg-[#e7ddc2]">
+                  {viewedProfilePosts.map((post) => (
+                    <article key={post.id} className="bg-white/95 p-5 rounded-xl border border-[#e8dcc0] shadow-[0_8px_24px_rgba(44,44,44,0.06)] relative ml-6">
+                      <span className="absolute -left-7 top-6 w-3 h-3 rounded-full bg-[#D4AF37]" />
+                      <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden cursor-pointer" onClick={() => setSelectedProfilePost({ ...post, profile: viewedProfile })} />
+                      <p className="text-xs text-vintage-muted mt-2">{new Date(post.photo_date || post.created_at).toLocaleDateString()} {post.location_name ? `— ${post.location_name}` : ''}</p>
+                      <p className="text-sm mt-1">{post.caption}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {screen === 'profile' && profile && (
               <section className="space-y-4">
                 <h3 className="text-xl">Profile</h3>
                 <div className="bg-white p-5 rounded-xl border border-[#ece9df] space-y-3">
                   <input className="w-full p-3 border rounded-lg" value={profile.username || ''} onChange={(event) => setProfile({ ...profile, username: event.target.value })} />
-                  <div className="rounded-lg border border-[#ece9df] bg-[#faf9f4] p-3"><p className="text-xs uppercase tracking-wider text-vintage-muted mb-2">Bio</p><textarea className="w-full p-0 border-0 bg-transparent focus:outline-none text-sm leading-relaxed" rows={4} value={profile.bio || ''} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} placeholder="Collecting moments, not things" /></div>
+                  <div className="rounded-xl border border-[#e9dfc2] bg-gradient-to-br from-[#fffdf6] to-[#f8f4e7] p-4 shadow-sm"><p className="text-xs uppercase tracking-[2px] text-[#9c8450] mb-2">Curator Note</p><textarea className="w-full p-0 border-0 bg-transparent focus:outline-none text-sm leading-relaxed italic" rows={4} value={profile.bio || ''} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} placeholder="Collecting moments, not things" /></div>
                   <button className="text-sm underline" onClick={saveProfile}>Save profile</button>
                 </div>
 
@@ -862,12 +895,12 @@ export default function VintageApp() {
                     {timelineGroups.map(([year, yearPosts]) => (
                       <div key={year}>
                         <p className="text-center text-sm tracking-[3px] text-vintage-muted mb-3">— {year} —</p>
-                        <div className="space-y-6">
+                        <div className="space-y-8 relative before:content-[''] before:absolute before:left-3 before:top-0 before:bottom-0 before:w-px before:bg-[#e7ddc2]">
                           {yearPosts.map((post) => (
-                            <article key={post.id} className="bg-white p-4 rounded-lg border border-[#ece9df]">
+                            <article key={post.id} className="bg-white/95 p-5 rounded-xl border border-[#e8dcc0] shadow-[0_8px_24px_rgba(44,44,44,0.06)] relative ml-6"><span className="absolute -left-7 top-6 w-3 h-3 rounded-full bg-[#D4AF37]" />
                               <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden cursor-pointer" onClick={() => setSelectedProfilePost(post)} />
                               <p className="text-xs text-vintage-muted mt-2">{new Date(post.photo_date || post.created_at).toLocaleDateString()} {post.location_name ? `— ${post.location_name}` : ''}</p>
-                              <p className="text-sm mt-1">{post.caption}</p>
+                              <p className="text-sm mt-1">{post.caption}</p>{post.user_id === user?.id && <button className="text-xs text-red-500 underline mt-2" onClick={() => handleDeletePost(post.id)}>Delete memory</button>}
                             </article>
                           ))}
                         </div>
@@ -879,9 +912,12 @@ export default function VintageApp() {
                 {profileViewMode === 'classic' && (
                   <div className="grid grid-cols-3 gap-1">
                     {sortedProfilePosts.map((post) => (
-                      <button key={post.id} className="text-left" onClick={() => setSelectedProfilePost(post)}>
-                        <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden rounded" />
-                      </button>
+                      <div key={post.id} className="relative">
+                        <button className="text-left w-full" onClick={() => setSelectedProfilePost(post)}>
+                          <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden rounded" />
+                        </button>
+                        {post.user_id === user?.id && <button className="absolute top-1 right-1 text-[10px] bg-black/60 text-white px-2 py-1 rounded" onClick={() => handleDeletePost(post.id)}>Delete</button>}
+                      </div>
                     ))}
                   </div>
                 )}
