@@ -37,6 +37,14 @@ function sentenceCount(text) {
   return parts.map((part) => part.trim()).filter(Boolean).length
 }
 
+function formatMonthDay(dateValue) {
+  const date = new Date(dateValue)
+  return {
+    month: date.toLocaleString('en-US', { month: 'short' }).toUpperCase(),
+    day: String(date.getDate()).padStart(2, '0')
+  }
+}
+
 async function reverseGeocode(latitude, longitude) {
   if (!latitude || !longitude) return null
 
@@ -142,14 +150,18 @@ export default function VintageApp() {
     return copy
   }, [myPosts, profileViewMode])
 
-  const timelineGroups = useMemo(() => {
-    const groups = {}
+  const threadItems = useMemo(() => {
+    const items = []
+    let previousYear = null
     sortedProfilePosts.forEach((post) => {
       const year = new Date(post.photo_date || post.created_at).getFullYear()
-      if (!groups[year]) groups[year] = []
-      groups[year].push(post)
+      if (year !== previousYear) {
+        items.push({ type: 'year', id: `year-${year}`, year })
+        previousYear = year
+      }
+      items.push({ type: 'post', id: post.id, post })
     })
-    return Object.entries(groups).sort((a, b) => Number(b[0]) - Number(a[0]))
+    return items
   }, [sortedProfilePosts])
 
   const mapClusters = useMemo(() => {
@@ -851,75 +863,69 @@ export default function VintageApp() {
             {screen === 'viewedProfile' && viewedProfile && (
               <section className="space-y-4">
                 <button className="text-sm underline" onClick={() => setScreen('search')}>← Back to search</button>
-                <div className="bg-white p-5 rounded-xl border border-[#ece9df]">
-                  <p className="text-xl">{viewedProfile.username}</p>
-                  <p className="text-sm text-vintage-muted italic mt-1">{viewedProfile.bio || DEFAULT_BIO}</p>
+                <div className="text-center">
+                  <p className="text-[20px] tracking-[3px] font-semibold">{viewedProfile.username}</p>
+                  <p className="text-[13px] text-[#888] italic mt-1">{viewedProfile.bio || DEFAULT_BIO}</p>
+                  <p className="text-[12px] text-[#999] mt-1">{viewedProfilePosts.length} memories</p>
                 </div>
-                <div className="space-y-5 relative before:content-[''] before:absolute before:left-3 before:top-0 before:bottom-0 before:w-px before:bg-[#e7ddc2]">
-                  {viewedProfilePosts.map((post) => (
-                    <article key={post.id} className="bg-white/95 p-5 rounded-xl border border-[#e8dcc0] shadow-[0_8px_24px_rgba(44,44,44,0.06)] relative ml-6">
-                      <span className="absolute -left-7 top-6 w-3 h-3 rounded-full bg-[#D4AF37]" />
-                      <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden cursor-pointer" onClick={() => setSelectedProfilePost({ ...post, profile: viewedProfile })} />
-                      <p className="text-xs text-vintage-muted mt-2">{new Date(post.photo_date || post.created_at).toLocaleDateString()} {post.location_name ? `— ${post.location_name}` : ''}</p>
-                      <p className="text-sm mt-1">{post.caption}</p>
-                    </article>
-                  ))}
-                </div>
+                <ThreadTimeline
+                  items={buildThreadItems(viewedProfilePosts)}
+                  commentsByPost={commentsByPost}
+                  onOpenPost={(post) => setSelectedProfilePost({ ...post, profile: viewedProfile })}
+                  currentUserId={user?.id}
+                  onDeletePost={handleDeletePost}
+                  canDelete={false}
+                />
               </section>
             )}
 
             {screen === 'profile' && profile && (
               <section className="space-y-4">
-                <h3 className="text-xl">Profile</h3>
-                <div className="bg-white p-5 rounded-xl border border-[#ece9df] space-y-3">
-                  <input className="w-full p-3 border rounded-lg" value={profile.username || ''} onChange={(event) => setProfile({ ...profile, username: event.target.value })} />
-                  <div className="rounded-xl border border-[#e9dfc2] bg-gradient-to-br from-[#fffdf6] to-[#f8f4e7] p-4 shadow-sm"><p className="text-xs uppercase tracking-[2px] text-[#9c8450] mb-2">Curator Note</p><textarea className="w-full p-0 border-0 bg-transparent focus:outline-none text-sm leading-relaxed italic" rows={4} value={profile.bio || ''} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} placeholder="Collecting moments, not things" /></div>
+                <div className="text-center">
+                  <div className="w-[70px] h-[70px] rounded-full bg-[#e9e4d8] mx-auto mb-3" />
+                  <p className="text-[20px] tracking-[3px] font-semibold">{profile.username}</p>
+                  <p className="text-[13px] text-[#888] italic mt-1">{profile.bio || DEFAULT_BIO}</p>
+                  <p className="text-[12px] text-[#999] mt-1">{myPosts.length} memories · {profileStats.followers} followers · {profileStats.following} following</p>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl border border-[#ece9df] space-y-3">
+                  <input className="w-full p-3 border rounded-full text-sm" value={profile.username || ''} onChange={(event) => setProfile({ ...profile, username: event.target.value })} />
+                  <div className="rounded-xl border border-[#e9dfc2] bg-gradient-to-br from-[#fffdf6] to-[#f8f4e7] p-4">
+                    <p className="text-xs uppercase tracking-[2px] text-[#9c8450] mb-2">Curator Note</p>
+                    <textarea className="w-full p-0 border-0 bg-transparent focus:outline-none text-sm leading-relaxed italic" rows={3} value={profile.bio || ''} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} placeholder="Collecting moments, not things" />
+                  </div>
                   <button className="text-sm underline" onClick={saveProfile}>Save profile</button>
                 </div>
 
-                <div className="grid grid-cols-3 text-center bg-white rounded p-3">
-                  <Stat label="Posts" value={myPosts.length} />
-                  <Stat label="Followers" value={profileStats.followers} />
-                  <Stat label="Following" value={profileStats.following} />
+                <div className="flex flex-wrap gap-2 justify-center">
+                  <button className={`px-4 h-[30px] rounded-full text-[11px] ${profileViewMode === 'classic' ? 'bg-vintage-charcoal text-white' : 'border border-[#D4D4D4] text-[#888]'}`} onClick={() => setProfileViewMode('classic')}>Classic</button>
+                  <button className={`px-4 h-[30px] rounded-full text-[11px] ${profileViewMode === 'photoAgeNewest' ? 'bg-vintage-charcoal text-white' : 'border border-[#D4D4D4] text-[#888]'}`} onClick={() => setProfileViewMode('photoAgeNewest')}>Newest</button>
+                  <button className={`px-4 h-[30px] rounded-full text-[11px] ${profileViewMode === 'photoAgeOldest' ? 'bg-vintage-charcoal text-white' : 'border border-[#D4D4D4] text-[#888]'}`} onClick={() => setProfileViewMode('photoAgeOldest')}>Oldest</button>
+                  <button className={`px-4 h-[30px] rounded-full text-[11px] ${profileViewMode === 'mapView' ? 'bg-vintage-charcoal text-white' : 'border border-[#D4D4D4] text-[#888]'}`} onClick={() => setProfileViewMode('mapView')}>Map</button>
                 </div>
 
-                <div className="bg-white border rounded-lg p-2 flex gap-2 text-xs overflow-x-auto no-scrollbar">
-                  <button className={`px-2 py-1 rounded ${profileViewMode === 'classic' ? 'bg-vintage-charcoal text-white' : 'bg-[#f5f5f0]'}`} onClick={() => setProfileViewMode('classic')}>Classic</button>
-                  <button className={`px-2 py-1 rounded ${profileViewMode === 'photoAgeNewest' ? 'bg-vintage-charcoal text-white' : 'bg-[#f5f5f0]'}`} onClick={() => setProfileViewMode('photoAgeNewest')}>Photo Age (Newest)</button>
-                  <button className={`px-2 py-1 rounded ${profileViewMode === 'photoAgeOldest' ? 'bg-vintage-charcoal text-white' : 'bg-[#f5f5f0]'}`} onClick={() => setProfileViewMode('photoAgeOldest')}>Photo Age (Oldest)</button>
-                  <button className={`px-2 py-1 rounded ${profileViewMode === 'mapView' ? 'bg-vintage-charcoal text-white' : 'bg-[#f5f5f0]'}`} onClick={() => setProfileViewMode('mapView')}>Map View</button>
-                </div>
-
-                {profileViewMode !== 'mapView' && profileViewMode !== 'classic' && (
-                  <div className="space-y-5">
-                    {timelineGroups.map(([year, yearPosts]) => (
-                      <div key={year}>
-                        <p className="text-center text-sm tracking-[3px] text-vintage-muted mb-3">— {year} —</p>
-                        <div className="space-y-8 relative before:content-[''] before:absolute before:left-3 before:top-0 before:bottom-0 before:w-px before:bg-[#e7ddc2]">
-                          {yearPosts.map((post) => (
-                            <article key={post.id} className="bg-white/95 p-5 rounded-xl border border-[#e8dcc0] shadow-[0_8px_24px_rgba(44,44,44,0.06)] relative ml-6"><span className="absolute -left-7 top-6 w-3 h-3 rounded-full bg-[#D4AF37]" />
-                              <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden cursor-pointer" onClick={() => setSelectedProfilePost(post)} />
-                              <p className="text-xs text-vintage-muted mt-2">{new Date(post.photo_date || post.created_at).toLocaleDateString()} {post.location_name ? `— ${post.location_name}` : ''}</p>
-                              <p className="text-sm mt-1">{post.caption}</p>{post.user_id === user?.id && <button className="text-xs text-red-500 underline mt-2" onClick={() => handleDeletePost(post.id)}>Delete memory</button>}
-                            </article>
-                          ))}
-                        </div>
+                {profileViewMode === 'classic' && (
+                  <div className="grid grid-cols-3 gap-[2px]">
+                    {sortedProfilePosts.map((post) => (
+                      <div key={post.id} className="relative">
+                        <button className="text-left w-full" onClick={() => setSelectedProfilePost(post)}>
+                          <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden" />
+                        </button>
+                        {post.user_id === user?.id && <button className="absolute top-1 right-1 text-[10px] bg-black/60 text-white px-2 py-1" onClick={() => handleDeletePost(post.id)}>Delete</button>}
                       </div>
                     ))}
                   </div>
                 )}
 
-                {profileViewMode === 'classic' && (
-                  <div className="grid grid-cols-3 gap-1">
-                    {sortedProfilePosts.map((post) => (
-                      <div key={post.id} className="relative">
-                        <button className="text-left w-full" onClick={() => setSelectedProfilePost(post)}>
-                          <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden rounded" />
-                        </button>
-                        {post.user_id === user?.id && <button className="absolute top-1 right-1 text-[10px] bg-black/60 text-white px-2 py-1 rounded" onClick={() => handleDeletePost(post.id)}>Delete</button>}
-                      </div>
-                    ))}
-                  </div>
+                {(profileViewMode === 'photoAgeNewest' || profileViewMode === 'photoAgeOldest') && (
+                  <ThreadTimeline
+                    items={threadItems}
+                    commentsByPost={commentsByPost}
+                    onOpenPost={setSelectedProfilePost}
+                    currentUserId={user?.id}
+                    onDeletePost={handleDeletePost}
+                    canDelete
+                  />
                 )}
 
                 {profileViewMode === 'mapView' && (
@@ -935,13 +941,6 @@ export default function VintageApp() {
                     </div>
                   </div>
                 )}
-
-                <div className="bg-white p-4 rounded-lg border">
-                  <h4 className="font-semibold mb-2">Your {annualMuseum.year} Museum</h4>
-                  <p className="text-sm">{annualMuseum.total} memories curated across {annualMuseum.locations} locations.</p>
-                  {annualMuseum.earliest && <p className="text-xs text-vintage-muted mt-1">Earliest memory: {new Date(annualMuseum.earliest.photo_date || annualMuseum.earliest.created_at).toLocaleDateString()}</p>}
-                  {annualMuseum.mostLiked && <p className="text-xs text-vintage-muted">Most-liked memory: {annualMuseum.mostLiked.likes || 0} likes</p>}
-                </div>
 
                 <button className="underline text-sm" onClick={() => supabase.auth.signOut()}>Log out</button>
               </section>
@@ -962,6 +961,102 @@ export default function VintageApp() {
         </>
       )}
     </div>
+  )
+}
+
+function buildThreadItems(posts) {
+  const sorted = [...posts].sort((a, b) => new Date(a.photo_date || a.created_at) - new Date(b.photo_date || b.created_at))
+  const items = []
+  let year = null
+  sorted.forEach((post) => {
+    const nextYear = new Date(post.photo_date || post.created_at).getFullYear()
+    if (nextYear !== year) {
+      items.push({ type: 'year', id: `year-${nextYear}`, year: nextYear })
+      year = nextYear
+    }
+    items.push({ type: 'post', id: post.id, post })
+  })
+  return items
+}
+
+function ThreadTimeline({ items, commentsByPost, onOpenPost, currentUserId, onDeletePost, canDelete }) {
+  if (!items.length) {
+    return (
+      <div className="relative min-h-[220px] pl-[70px]">
+        <div className="absolute left-[40px] top-0 bottom-0 w-[2px] bg-[#D4AF37]" />
+        <div className="relative pt-10">
+          <div className="absolute left-[35px] top-[56px] w-[10px] h-[10px] rounded-full bg-[#D4AF37]" />
+          <div className="absolute left-[45px] top-[61px] w-[20px] h-px bg-[#D4AF37]" />
+          <p className="italic text-[#999] text-[16px] min-h-[120px] flex items-center">Your museum is empty. Start curating your memories.</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative pl-[70px]">
+      <div className="absolute left-[40px] top-0 bottom-0 w-[2px] bg-[#D4AF37]" />
+      <div className="space-y-1">
+        {items.map((item) => item.type === 'year'
+          ? <YearMilestone key={item.id} year={item.year} />
+          : <TimelineMemoryItem key={item.id} post={item.post} commentsCount={(commentsByPost[item.post.id] || []).length} onOpenPost={onOpenPost} canDelete={canDelete && item.post.user_id === currentUserId} onDeletePost={onDeletePost} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function YearMilestone({ year }) {
+  const ref = useRef(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) setVisible(true)
+    }, { threshold: 0.35 })
+    if (ref.current) observer.observe(ref.current)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div className="relative h-[116px]" ref={ref}>
+      <div className={`absolute left-[22px] top-[40px] w-[36px] h-[36px] rounded-full border-2 border-[#D4AF37] bg-[#F5F5F0] flex items-center justify-center text-[12px] tracking-[3px] text-[#D4AF37] transition-all duration-[400ms] ease-out ${visible ? 'opacity-100 scale-100' : 'opacity-50 scale-[0.8]'}`}>
+        {year}
+      </div>
+    </div>
+  )
+}
+
+function TimelineMemoryItem({ post, commentsCount, onOpenPost, canDelete, onDeletePost }) {
+  const ref = useRef(null)
+  const [visible, setVisible] = useState(false)
+  const { month, day } = formatMonthDay(post.photo_date || post.created_at)
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) setVisible(true)
+    }, { threshold: 0.2, rootMargin: '0px 0px -20% 0px' })
+    if (ref.current) observer.observe(ref.current)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <article ref={ref} className={`relative mb-[56px] transition-all duration-[400ms] ease-out ${visible ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-[20px]'}`}>
+      <div className="absolute left-[-70px] top-[8px] w-[30px] text-right">
+        <p className="text-[9px] tracking-[2px] text-[#BBBBBB]">{month}</p>
+        <p className="text-[13px] text-[#999999]">{day}</p>
+      </div>
+      <div className="absolute left-[-35px] top-[24px] w-[10px] h-[10px] rounded-full bg-[#D4AF37]" />
+      <div className="absolute left-[-25px] top-[29px] w-[20px] h-px bg-[#D4AF37]" />
+
+      <button className="w-full text-left" onClick={() => onOpenPost(post)}>
+        <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="border border-[rgba(0,0,0,0.05)] min-h-[250px] max-h-[450px] overflow-hidden" />
+      </button>
+      <p className="mt-3 text-[13px] tracking-[3px] uppercase">{post.location_name || 'UNKNOWN LOCATION'}</p>
+      {post.caption ? <p className="text-[13px] italic text-[#888]">{post.caption}</p> : null}
+      <p className="text-[11px] text-[#AAAAAA]">♥ {post.likes || 0} · {commentsCount} comments</p>
+      {canDelete ? <button className="text-xs text-red-500 underline mt-2" onClick={() => onDeletePost(post.id)}>Delete memory</button> : null}
+    </article>
   )
 }
 
