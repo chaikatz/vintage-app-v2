@@ -61,7 +61,7 @@ async function reverseGeocode(latitude, longitude) {
   }
 }
 
-const FilteredPhoto = memo(function FilteredPhoto({ src, filter, dateStamp, className = '', onClick }) {
+const UploadFilteredPreview = memo(function UploadFilteredPreview({ src, filter, dateStamp, className = '', onClick }) {
   const containerRef = useRef(null)
   const canvasRef = useRef(null)
   const [processed, setProcessed] = useState(false)
@@ -107,6 +107,11 @@ const FilteredPhoto = memo(function FilteredPhoto({ src, filter, dateStamp, clas
     </div>
   )
 })
+
+
+function DisplayPhoto({ src, alt = 'memory', className = '', onClick }) {
+  return <img src={src} alt={alt} loading="lazy" className={`w-full h-auto block ${className}`} onClick={onClick} />
+}
 
 export default function VintageApp() {
   const [screen, setScreen] = useState('welcome')
@@ -570,6 +575,31 @@ export default function VintageApp() {
     setPendingUploadMeta({ latitude: memory.latitude, longitude: memory.longitude, locationName: memory.locationName })
   }
 
+
+  async function processImageToJpegBlob(src, filter, dateStamp) {
+    return new Promise((resolve, reject) => {
+      const image = new Image()
+      image.crossOrigin = 'anonymous'
+      image.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = image.width
+        canvas.height = image.height
+        const context = canvas.getContext('2d')
+        context.drawImage(image, 0, 0)
+        applyFilterToCanvas(canvas, context, filter, dateStamp)
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error('Failed to process image'))
+            return
+          }
+          resolve(blob)
+        }, 'image/jpeg', 0.9)
+      }
+      image.onerror = () => reject(new Error('Image load failed'))
+      image.src = src
+    })
+  }
+
   async function handleCreatePost() {
     if (!uploadedFile) {
       showNotification('Select a memory first')
@@ -591,8 +621,23 @@ export default function VintageApp() {
       return
     }
 
-    const fileName = `${user.id}/${Date.now()}-${uploadedFile.name}`
-    const { error: uploadError } = await supabase.storage.from('photos').upload(fileName, uploadedFile)
+    const dateStamp = formatDateStamp(effectiveDate)
+    const previewSource = uploadedPreview || URL.createObjectURL(uploadedFile)
+
+    let processedBlob
+    try {
+      processedBlob = await processImageToJpegBlob(previewSource, selectedFilter, dateStamp)
+    } catch {
+      showNotification('Image processing failed')
+      return
+    }
+
+    const fileName = `${user.id}/${Date.now()}-processed.jpg`
+    const { error: uploadError } = await supabase.storage.from('photos').upload(fileName, processedBlob, {
+      contentType: 'image/jpeg',
+      upsert: false
+    })
+
     if (uploadError) {
       showNotification('Upload failed')
       return
@@ -606,7 +651,7 @@ export default function VintageApp() {
       caption: uploadCaption.trim(),
       filter: selectedFilter,
       photo_date: effectiveDate.toISOString(),
-      date_stamp: formatDateStamp(effectiveDate),
+      date_stamp: dateStamp,
       latitude: pendingUploadMeta.latitude,
       longitude: pendingUploadMeta.longitude,
       location_name: pendingUploadMeta.locationName
@@ -774,7 +819,7 @@ export default function VintageApp() {
           <div className="w-full max-w-lg" onClick={(event) => event.stopPropagation()}>
             <div className="flex justify-end mb-2"><button className="text-white text-sm underline" onClick={() => setSelectedProfilePost(null)}>Close</button></div>
             <div className="bg-white rounded-xl p-3">
-              <FilteredPhoto src={selectedProfilePost.image_url} filter={selectedProfilePost.filter} dateStamp={selectedProfilePost.date_stamp} className="rounded overflow-hidden" />
+              <DisplayPhoto src={selectedProfilePost.image_url} className="rounded overflow-hidden" />
               <p className="text-sm mt-3"><span className="font-semibold mr-2">{selectedProfilePost.profile?.username || profile?.username}</span>{selectedProfilePost.caption}</p>
             </div>
           </div>
@@ -835,7 +880,7 @@ export default function VintageApp() {
                       </div>
                     </div>
                     <div onDoubleClick={() => handleLike(post)}>
-                      <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden" />
+                      <DisplayPhoto src={post.image_url} className="rounded overflow-hidden" />
                     </div>
                     <div className="flex items-center justify-between mt-2"><button onClick={() => handleLike(post)}>{likedPosts.has(post.id) ? '♥' : '♡'} {post.likes || 0}</button><span className="text-xs text-vintage-muted">{(commentsByPost[post.id] || []).length} comments</span></div>
                     <p className="mt-2"><span className="font-semibold mr-2">{post.profile?.username}</span>{post.caption}</p>
@@ -896,7 +941,7 @@ export default function VintageApp() {
                 {uploadStep === 'select' && <label className="block border-2 border-dashed rounded-lg p-10 text-center bg-white cursor-pointer"><input type="file" accept="image/*" onChange={handlePickMemory} className="hidden" />Select memory to post</label>}
                 {uploadStep === 'filter' && uploadedPreview && (
                   <>
-                    <FilteredPhoto src={uploadedPreview} filter={selectedFilter} dateStamp={formatDateStamp(photoDate || manualDate || new Date())} className="rounded overflow-hidden" />
+                    <UploadFilteredPreview src={uploadedPreview} filter={selectedFilter} dateStamp={formatDateStamp(photoDate || manualDate || new Date())} className="rounded overflow-hidden" />
                     <div className="flex gap-2 overflow-x-auto no-scrollbar">{Object.entries(FILTERS).map(([key, filter]) => <button key={key} className={`px-3 py-2 rounded text-sm ${selectedFilter === key ? 'bg-vintage-charcoal text-white' : 'bg-white border'}`} onClick={() => setSelectedFilter(key)}>{filter.name}</button>)}</div>
                     {needsManualDate && <input type="date" className="w-full p-3 border rounded bg-white" value={manualDate} onChange={(event) => setManualDate(event.target.value)} />}
                     <input value={uploadCaption} onChange={(event) => setUploadCaption(event.target.value)} className="w-full p-3 border rounded bg-white" placeholder="Location, year..." />
@@ -925,8 +970,8 @@ export default function VintageApp() {
                     <h4 className="font-semibold mb-2">Shared Memories</h4>
                     {sharedMemoryAlerts.slice(0, 3).map((item) => (
                       <div key={item.id} className="grid grid-cols-2 gap-2 mb-3">
-                        <FilteredPhoto src={item.mine.image_url} filter={item.mine.filter} dateStamp={item.mine.date_stamp} className="rounded overflow-hidden" />
-                        <FilteredPhoto src={item.theirs.image_url} filter={item.theirs.filter} dateStamp={item.theirs.date_stamp} className="rounded overflow-hidden" />
+                        <DisplayPhoto src={item.mine.image_url} className="rounded overflow-hidden" />
+                        <DisplayPhoto src={item.theirs.image_url} className="rounded overflow-hidden" />
                       </div>
                     ))}
                   </div>
@@ -954,7 +999,7 @@ export default function VintageApp() {
                   <div className="grid grid-cols-3 gap-[2px]">
                     {sortedViewedProfilePosts.map((post) => (
                       <button key={post.id} className="text-left w-full" onClick={() => setSelectedProfilePost({ ...post, profile: viewedProfile })}>
-                        <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden" />
+                        <DisplayPhoto src={post.image_url} className="aspect-square object-cover overflow-hidden" />
                       </button>
                     ))}
                   </div>
@@ -1018,7 +1063,7 @@ export default function VintageApp() {
                     {sortedProfilePosts.map((post) => (
                       <div key={post.id} className="relative">
                         <button className="text-left w-full" onClick={() => setSelectedProfilePost(post)}>
-                          <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden" />
+                          <DisplayPhoto src={post.image_url} className="aspect-square object-cover overflow-hidden" />
                         </button>
                         <div className="absolute top-1 right-1"><PostOverflowMenu post={post} canDelete={post.user_id === user?.id} onDelete={handleDeletePost} onShare={handleSharePost} compact /></div>
                       </div>
@@ -1160,7 +1205,7 @@ function TimelineMemoryItem({ post, commentsCount, onOpenPost, canDelete, onDele
       <div className="absolute left-[-25px] top-[29px] w-[20px] h-px bg-[#D4AF37]" />
 
       <button className="w-full text-left" onClick={() => onOpenPost(post)}>
-        <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="border border-[rgba(0,0,0,0.05)] min-h-[250px] max-h-[450px] overflow-hidden" />
+        <DisplayPhoto src={post.image_url} className="border border-[rgba(0,0,0,0.05)] min-h-[250px] max-h-[450px] object-cover overflow-hidden" />
       </button>
       <p className="mt-3 text-[13px] tracking-[3px] uppercase">{post.location_name || 'UNKNOWN LOCATION'}</p>
       {post.caption ? <p className="text-[13px] italic text-[#888]">{post.caption}</p> : null}
