@@ -19,9 +19,6 @@ CREATE TABLE posts (
   filter TEXT DEFAULT 'slimAarons',
   photo_date TIMESTAMP WITH TIME ZONE,
   date_stamp TEXT,
-  latitude DOUBLE PRECISION,
-  longitude DOUBLE PRECISION,
-  location_name TEXT,
   likes INTEGER DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -51,22 +48,12 @@ CREATE TABLE comments (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Invite-only onboarding
-CREATE TABLE invite_codes (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  code TEXT UNIQUE NOT NULL,
-  creator_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-  used_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
 -- Enable Row Level Security
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
 ALTER TABLE likes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE invite_codes ENABLE ROW LEVEL SECURITY;
 
 -- Profiles policies
 CREATE POLICY "Public profiles are viewable by everyone" ON profiles
@@ -121,17 +108,6 @@ CREATE POLICY "Users can create comments" ON comments
 CREATE POLICY "Users can delete own comments" ON comments
   FOR DELETE USING (auth.uid() = user_id);
 
--- Invite code policies
-CREATE POLICY "Users can view own invite codes" ON invite_codes
-  FOR SELECT USING (auth.uid() = creator_id OR auth.uid() = used_by);
-
-CREATE POLICY "Users can create own invite codes" ON invite_codes
-  FOR INSERT WITH CHECK (auth.uid() = creator_id);
-
-CREATE POLICY "Invite codes can be redeemed once" ON invite_codes
-  FOR UPDATE USING (used_by IS NULL)
-  WITH CHECK (used_by IS NOT NULL);
-
 -- Create storage bucket for photos
 INSERT INTO storage.buckets (id, name, public) VALUES ('photos', 'photos', true);
 
@@ -144,9 +120,3 @@ CREATE POLICY "Authenticated users can upload photos" ON storage.objects
 
 CREATE POLICY "Users can delete own photos" ON storage.objects
   FOR DELETE USING (bucket_id = 'photos' AND auth.uid()::text = (storage.foldername(name))[1]);
-
-
--- Backfill-safe alters for existing projects
-ALTER TABLE posts ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
-ALTER TABLE posts ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
-ALTER TABLE posts ADD COLUMN IF NOT EXISTS location_name TEXT;
