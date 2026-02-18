@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { FILTERS, applyFilterToCanvas, formatDateStamp, generateStoryImage } from '@/lib/filters'
 
@@ -61,13 +61,28 @@ async function reverseGeocode(latitude, longitude) {
   }
 }
 
-function FilteredPhoto({ src, filter, dateStamp, className = '', onClick }) {
+const FilteredPhoto = memo(function FilteredPhoto({ src, filter, dateStamp, className = '', onClick }) {
+  const containerRef = useRef(null)
   const canvasRef = useRef(null)
   const [processed, setProcessed] = useState(false)
+  const [isVisible, setIsVisible] = useState(false)
+
+  useEffect(() => {
+    if (!containerRef.current) return
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setIsVisible(true)
+        observer.disconnect()
+      }
+    }, { rootMargin: '250px' })
+
+    observer.observe(containerRef.current)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !src) return
+    if (!canvas || !src || !isVisible) return
 
     const context = canvas.getContext('2d')
     const image = new Image()
@@ -83,15 +98,15 @@ function FilteredPhoto({ src, filter, dateStamp, className = '', onClick }) {
     }
 
     image.src = src
-  }, [src, filter, dateStamp])
+  }, [src, filter, dateStamp, isVisible])
 
   return (
-    <div onClick={onClick} className={`relative ${className}`}>
+    <div ref={containerRef} onClick={onClick} className={`relative ${className}`}>
       <canvas ref={canvasRef} className={`w-full h-auto block transition-opacity duration-300 ${processed ? 'opacity-100' : 'opacity-0'}`} />
       {!processed && <div className="w-full pb-[100%] bg-gray-200 shimmer" />}
     </div>
   )
-}
+})
 
 export default function VintageApp() {
   const [screen, setScreen] = useState('welcome')
@@ -608,16 +623,46 @@ export default function VintageApp() {
     await refreshAll()
   }
 
+  async function handleSharePost(post) {
+    const shareUrl = post.image_url
+    const shareText = `${post.caption || 'A memory from VINTAGE'}${post.location_name ? ` — ${post.location_name}` : ''}`
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'VINTAGE Memory', text: shareText, url: shareUrl })
+        return
+      } catch {
+        // user cancelled or share unavailable
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      showNotification('Memory link copied. Paste into any app to share.')
+    } catch {
+      showNotification('Share unavailable on this device.')
+    }
+  }
+
   async function handleLike(post) {
     const liked = likedPosts.has(post.id)
+    const nextLikes = liked ? Math.max((post.likes || 1) - 1, 0) : (post.likes || 0) + 1
+
+    setPosts((prev) => prev.map((item) => item.id === post.id ? { ...item, likes: nextLikes } : item))
+    setLikedPosts((prev) => {
+      const next = new Set(prev)
+      if (liked) next.delete(post.id)
+      else next.add(post.id)
+      return next
+    })
+
     if (liked) {
       await supabase.from('likes').delete().eq('user_id', user.id).eq('post_id', post.id)
-      await supabase.from('posts').update({ likes: Math.max((post.likes || 1) - 1, 0) }).eq('id', post.id)
     } else {
       await supabase.from('likes').insert({ user_id: user.id, post_id: post.id })
-      await supabase.from('posts').update({ likes: (post.likes || 0) + 1 }).eq('id', post.id)
     }
-    await Promise.all([loadLikes(), loadPosts()])
+
+    await supabase.from('posts').update({ likes: nextLikes }).eq('id', post.id)
   }
 
   async function handleDeletePost(postId) {
@@ -786,7 +831,7 @@ export default function VintageApp() {
                       </div>
                       <div className="flex items-center gap-3">
                         <button className="text-xs underline" onClick={() => exportStory(post)}>Story export</button>
-                        {post.user_id === user?.id && <button className="text-xs text-red-500 underline" onClick={() => handleDeletePost(post.id)}>Delete</button>}
+                        <PostOverflowMenu post={post} canDelete={post.user_id === user?.id} onDelete={handleDeletePost} onShare={handleSharePost} />
                       </div>
                     </div>
                     <div onDoubleClick={() => handleLike(post)}>
@@ -922,6 +967,7 @@ export default function VintageApp() {
                     onOpenPost={(post) => setSelectedProfilePost({ ...post, profile: viewedProfile })}
                     currentUserId={user?.id}
                     onDeletePost={handleDeletePost}
+                    onSharePost={handleSharePost}
                     canDelete={false}
                   />
                 )}
@@ -974,7 +1020,7 @@ export default function VintageApp() {
                         <button className="text-left w-full" onClick={() => setSelectedProfilePost(post)}>
                           <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="aspect-square overflow-hidden" />
                         </button>
-                        {post.user_id === user?.id && <button className="absolute top-1 right-1 text-[10px] bg-black/60 text-white px-2 py-1" onClick={() => handleDeletePost(post.id)}>Delete</button>}
+                        <div className="absolute top-1 right-1"><PostOverflowMenu post={post} canDelete={post.user_id === user?.id} onDelete={handleDeletePost} onShare={handleSharePost} compact /></div>
                       </div>
                     ))}
                   </div>
@@ -987,6 +1033,7 @@ export default function VintageApp() {
                     onOpenPost={setSelectedProfilePost}
                     currentUserId={user?.id}
                     onDeletePost={handleDeletePost}
+                    onSharePost={handleSharePost}
                     canDelete
                   />
                 )}
@@ -1042,7 +1089,7 @@ function buildThreadItems(posts) {
   return items
 }
 
-function ThreadTimeline({ items, commentsByPost, onOpenPost, currentUserId, onDeletePost, canDelete }) {
+function ThreadTimeline({ items, commentsByPost, onOpenPost, currentUserId, onDeletePost, onSharePost, canDelete }) {
   if (!items.length) {
     return (
       <div className="relative min-h-[220px] pl-[70px]">
@@ -1062,7 +1109,7 @@ function ThreadTimeline({ items, commentsByPost, onOpenPost, currentUserId, onDe
       <div className="space-y-1">
         {items.map((item) => item.type === 'year'
           ? <YearMilestone key={item.id} year={item.year} />
-          : <TimelineMemoryItem key={item.id} post={item.post} commentsCount={(commentsByPost[item.post.id] || []).length} onOpenPost={onOpenPost} canDelete={canDelete && item.post.user_id === currentUserId} onDeletePost={onDeletePost} />
+          : <TimelineMemoryItem key={item.id} post={item.post} commentsCount={(commentsByPost[item.post.id] || []).length} onOpenPost={onOpenPost} canDelete={canDelete && item.post.user_id === currentUserId} onDeletePost={onDeletePost} onSharePost={onSharePost} />
         )}
       </div>
     </div>
@@ -1090,7 +1137,7 @@ function YearMilestone({ year }) {
   )
 }
 
-function TimelineMemoryItem({ post, commentsCount, onOpenPost, canDelete, onDeletePost }) {
+function TimelineMemoryItem({ post, commentsCount, onOpenPost, canDelete, onDeletePost, onSharePost }) {
   const ref = useRef(null)
   const [visible, setVisible] = useState(false)
   const { month, day } = formatMonthDay(post.photo_date || post.created_at)
@@ -1118,8 +1165,49 @@ function TimelineMemoryItem({ post, commentsCount, onOpenPost, canDelete, onDele
       <p className="mt-3 text-[13px] tracking-[3px] uppercase">{post.location_name || 'UNKNOWN LOCATION'}</p>
       {post.caption ? <p className="text-[13px] italic text-[#888]">{post.caption}</p> : null}
       <p className="text-[11px] text-[#AAAAAA]">♥ {post.likes || 0} · {commentsCount} comments</p>
-      {canDelete ? <button className="text-xs text-red-500 underline mt-2" onClick={() => onDeletePost(post.id)}>Delete memory</button> : null}
+      <div className="mt-2"><PostOverflowMenu post={post} canDelete={canDelete} onDelete={onDeletePost} onShare={onSharePost} /></div>
     </article>
+  )
+}
+
+
+function PostOverflowMenu({ post, canDelete, onDelete, onShare, compact = false }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="relative inline-block text-left">
+      <button
+        className={`border border-[#e6e0cf] bg-white text-[#666] ${compact ? 'px-1.5 py-0.5 text-[12px]' : 'px-2 py-1 text-xs'} rounded`}
+        onClick={() => setOpen((prev) => !prev)}
+        aria-label="Post options"
+      >
+        ⋯
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 w-36 bg-white border border-[#ece9df] rounded-md shadow-lg z-50">
+          <button
+            className="w-full text-left px-3 py-2 text-sm hover:bg-[#f8f5ec]"
+            onClick={() => {
+              setOpen(false)
+              onShare(post)
+            }}
+          >
+            Share post
+          </button>
+          {canDelete && (
+            <button
+              className="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-[#f8f5ec]"
+              onClick={() => {
+                setOpen(false)
+                onDelete(post.id)
+              }}
+            >
+              Delete post
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
