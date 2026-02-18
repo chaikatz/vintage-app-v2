@@ -576,10 +576,11 @@ export default function VintageApp() {
   }
 
 
-  async function processImageToJpegBlob(src, filter, dateStamp) {
+  async function processImageToJpegBlob(file, filter, dateStamp) {
     return new Promise((resolve, reject) => {
       const image = new Image()
-      image.crossOrigin = 'anonymous'
+      const objectUrl = URL.createObjectURL(file)
+
       image.onload = () => {
         const canvas = document.createElement('canvas')
         canvas.width = image.width
@@ -588,6 +589,7 @@ export default function VintageApp() {
         context.drawImage(image, 0, 0)
         applyFilterToCanvas(canvas, context, filter, dateStamp)
         canvas.toBlob((blob) => {
+          URL.revokeObjectURL(objectUrl)
           if (!blob) {
             reject(new Error('Failed to process image'))
             return
@@ -595,8 +597,13 @@ export default function VintageApp() {
           resolve(blob)
         }, 'image/jpeg', 0.9)
       }
-      image.onerror = () => reject(new Error('Image load failed'))
-      image.src = src
+
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl)
+        reject(new Error('Image load failed'))
+      }
+
+      image.src = objectUrl
     })
   }
 
@@ -622,11 +629,10 @@ export default function VintageApp() {
     }
 
     const dateStamp = formatDateStamp(effectiveDate)
-    const previewSource = uploadedPreview || URL.createObjectURL(uploadedFile)
 
     let processedBlob
     try {
-      processedBlob = await processImageToJpegBlob(previewSource, selectedFilter, dateStamp)
+      processedBlob = await processImageToJpegBlob(uploadedFile, selectedFilter, dateStamp)
     } catch {
       showNotification('Image processing failed')
       return
