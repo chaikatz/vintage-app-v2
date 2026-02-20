@@ -12,6 +12,40 @@ const ShareIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="n
 const TrashIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>)
 const CloseIcon = () => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>)
 
+
+function processImageToJpegBlob(file, filter, dateStamp) {
+  return new Promise((resolve, reject) => {
+    const imageUrl = URL.createObjectURL(file)
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = img.width
+      canvas.height = img.height
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0)
+      applyFilterToCanvas(canvas, ctx, filter, dateStamp)
+      canvas.toBlob((blob) => {
+        URL.revokeObjectURL(imageUrl)
+        if (!blob) {
+          reject(new Error('Failed to process image'))
+          return
+        }
+        resolve(blob)
+      }, 'image/jpeg', 0.9)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(imageUrl)
+      reject(new Error('Failed to load selected image'))
+    }
+    img.src = imageUrl
+  })
+}
+
+function getRenderableFilter(filterValue) {
+  return typeof filterValue === 'string' && filterValue.startsWith('baked:') ? null : filterValue
+}
+
 function FilteredPhoto({ src, filter, dateStamp, onClick, className = '' }) {
   const canvasRef = useRef(null)
   const [processed, setProcessed] = useState(false)
@@ -101,11 +135,16 @@ export default function VintageApp() {
   async function handlePost() {
     if (!uploadedFile || !uploadCaption.trim()) { showNotification('Please add a caption'); return }
     showNotification('Posting...')
-    const fileName = user.id + '/' + Date.now() + '-' + uploadedFile.name
-    const { error: uploadError } = await supabase.storage.from('photos').upload(fileName, uploadedFile)
+    const dateStamp = formatDateStamp(photoDate || new Date())
+    const processedBlob = await processImageToJpegBlob(uploadedFile, selectedFilter, dateStamp).catch(() => null)
+    if (!processedBlob) { showNotification('Failed to process image'); return }
+
+    const safeName = uploadedFile.name.replace(/\.[^.]+$/, '')
+    const fileName = `${user.id}/${Date.now()}-${safeName}-processed.jpg`
+    const { error: uploadError } = await supabase.storage.from('photos').upload(fileName, processedBlob, { contentType: 'image/jpeg' })
     if (uploadError) { showNotification('Failed to upload'); return }
     const { data: { publicUrl } } = supabase.storage.from('photos').getPublicUrl(fileName)
-    const { error: postError } = await supabase.from('posts').insert({ user_id: user.id, image_url: publicUrl, caption: uploadCaption, filter: selectedFilter, photo_date: photoDate?.toISOString(), date_stamp: formatDateStamp(photoDate || new Date()) })
+    const { error: postError } = await supabase.from('posts').insert({ user_id: user.id, image_url: publicUrl, caption: uploadCaption, filter: `baked:${selectedFilter}`, photo_date: photoDate?.toISOString(), date_stamp: dateStamp })
     if (postError) { showNotification('Failed to post'); return }
     setUploadedImage(null); setUploadedFile(null); setUploadCaption(''); setUploadStep('select'); setSelectedFilter('slimAarons'); setPhotoDate(null); setScreen('feed'); loadPosts(); showNotification('Memory posted!')
   }
@@ -136,7 +175,7 @@ export default function VintageApp() {
     showNotification('Memory deleted')
   }
 
-  function handleStoryExport(post) { showNotification('Creating Story...'); generateStoryImage(post.image_url, post.filter, post.date_stamp, (blob) => { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'vintage-' + post.date_stamp.replace(/\//g, '-') + '.png'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); showNotification('Saved!') }) }
+  function handleStoryExport(post) { showNotification('Creating Story...'); const storyFilter = getRenderableFilter(post.filter); const storyDateStamp = storyFilter ? post.date_stamp : null; generateStoryImage(post.image_url, storyFilter, storyDateStamp, (blob) => { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'vintage-' + post.date_stamp.replace(/\//g, '-') + '.png'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); showNotification('Saved!') }) }
 
   function PostCard({ post, showDelete = false }) {
     const isLiked = likedPosts.has(post.id)
@@ -147,7 +186,7 @@ export default function VintageApp() {
           <span className="font-semibold text-sm">{post.profiles?.username || 'Anonymous'}</span>
           {showDelete && post.user_id === user?.id && <button onClick={() => handleDelete(post.id)} className="ml-auto text-red-400 hover:text-red-600"><TrashIcon /></button>}
         </div>
-        <FilteredPhoto src={post.image_url} filter={post.filter} dateStamp={post.date_stamp} className="rounded overflow-hidden mb-3" />
+        <FilteredPhoto src={post.image_url} filter={getRenderableFilter(post.filter)} dateStamp={getRenderableFilter(post.filter) ? post.date_stamp : null} className="rounded overflow-hidden mb-3" />
         <div className="flex items-center gap-4 mb-2">
           <button onClick={() => handleLike(post.id)} className={`text-xl ${isLiked ? 'text-red-500' : ''}`}>{isLiked ? '♥' : '♡'}</button>
           <button onClick={() => handleStoryExport(post)} className="ml-auto flex items-center gap-1 text-xs text-vintage-muted"><ShareIcon /> STORY</button>
@@ -213,7 +252,7 @@ export default function VintageApp() {
             <div className="p-5 fade-in">
               <div className="text-center mb-8"><div className="w-20 h-20 rounded-full bg-gray-300 mx-auto mb-4 flex items-center justify-center text-3xl">{user?.email?.charAt(0).toUpperCase()}</div><p className="font-semibold">{user?.email?.split('@')[0]}</p><p className="text-sm text-vintage-muted italic">Collecting moments</p></div>
               <div className="flex justify-center gap-10 py-5 border-y border-gray-300 mb-5"><div className="text-center"><p className="text-xl font-semibold">{posts.filter(p => p.user_id === user?.id).length}</p><p className="text-xs text-vintage-muted uppercase">Posts</p></div><div className="text-center"><p className="text-xl font-semibold">0</p><p className="text-xs text-vintage-muted uppercase">Followers</p></div><div className="text-center"><p className="text-xl font-semibold">0</p><p className="text-xs text-vintage-muted uppercase">Following</p></div></div>
-              <div className="grid grid-cols-3 gap-1">{posts.filter(p => p.user_id === user?.id).map(post => (<div key={post.id} className="aspect-square overflow-hidden cursor-pointer" onClick={() => setViewingPost(post)}><FilteredPhoto src={post.image_url} filter={post.filter} className="h-full object-cover" /></div>))}</div>
+              <div className="grid grid-cols-3 gap-1">{posts.filter(p => p.user_id === user?.id).map(post => (<div key={post.id} className="aspect-square overflow-hidden cursor-pointer" onClick={() => setViewingPost(post)}><FilteredPhoto src={post.image_url} filter={getRenderableFilter(post.filter)} dateStamp={getRenderableFilter(post.filter) ? post.date_stamp : null} className="h-full object-cover" /></div>))}</div>
               <button onClick={handleLogout} className="w-full mt-8 p-3 border border-vintage-charcoal rounded text-sm">Log Out</button>
             </div>
           )}
